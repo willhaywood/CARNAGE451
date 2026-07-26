@@ -167,8 +167,7 @@ static float rrFieldBot  = 480.0f; /* ...and its bottom edge */
    and the readout drawRPanel() lays out there in portrait. Reserving it costs no
    playfield on a phone: the field is limited by the width, so the leftover height
    would otherwise just sit unused below. */
-#define RR_TOP_STRIP   150
-#define RR_SCORE_INSET  16
+#define RR_TOP_STRIP   160
 
 // Reset viewport when the screen is resized.
 static void screenResized() {
@@ -1148,13 +1147,9 @@ void drawSideBoards() {
     /* No masking needed: the field exactly fills its own viewport, and glClear
        has already blacked out everything outside it.
 
-       The score is inset from the top-left corner so it clears a notch.
-       drawRPanel() checks the orientation and lays itself out across the top
-       strip, so it needs no transform here. */
-    glPushMatrix();
-    glTranslatef(RR_SCORE_INSET, RR_SCORE_INSET, 0);
+       drawScore() and drawRPanel() both check the orientation and lay themselves
+       out across the top strip, so neither needs a transform here. */
     drawScore();
-    glPopMatrix();
     drawRPanel();
     return;
   }
