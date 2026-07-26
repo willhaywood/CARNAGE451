@@ -22,9 +22,34 @@ static int useAudio = 0;
 
 #define MUSIC_NUM 3
 
+/* Base names; the extension is chosen per-browser at load time, see below. */
 static char *musicFileName[MUSIC_NUM] = {
-  "stg_a.ogg", "stg_b.ogg", "stg_c.ogg",
+  "stg_a", "stg_b", "stg_c",
 };
+
+/*
+ * Candidate BGM containers, tried in order, first one that decodes wins.
+ *
+ * Only .mp3 is shipped, so it is first: probing a container that is not in the
+ * package costs a failed load and a console error per track on every startup.
+ * .ogg is kept as a second candidate purely so that dropping the original
+ * Vorbis files back into rr/sounds/ works with no code change -- they are the
+ * better encode (the MP3 is a lossy-to-lossy transcode of them), just not worth
+ * 2.3 MB of payload that every visitor downloads.
+ *
+ * MP3 rather than AAC/.m4a, which was tried first and does not work here:
+ * emscripten's asset preloader only decodes .ogg, .wav and .mp3 (see
+ * audioPlugin.canHandle in src/lib/libbrowser.js). An .m4a is packaged but never
+ * decoded, and Mix_LoadMUS still returns a non-NULL handle for it -- one with no
+ * audio behind it, so the load reports success and then plays silence. MP3 is
+ * decoded by the toolchain and supported by every browser including all iOS
+ * versions, so it buys the same compatibility with none of that.
+ *
+ * The effects are all .wav, which every browser decodes, so they need no
+ * fallback. Only the three music tracks do.
+ */
+static const char *musicExt[] = { ".mp3", ".ogg" };
+#define MUSIC_EXT_NUM ((int)(sizeof(musicExt) / sizeof(musicExt[0])))
 static Mix_Music *music[MUSIC_NUM];
 
 #define CHUNK_NUM 16
@@ -67,27 +92,64 @@ void closeSound() {
 
 // Initialize the sound.
 
+/*
+ * Load what can be loaded and keep going.
+ *
+ * Originally this bailed out on the first failure and cleared useAudio, which
+ * meant a single undecodable file silenced the entire game. That is a bad trade
+ * in a browser: the three .ogg BGM tracks are loaded before the sixteen .wav
+ * effects, so any codec, network or truncation problem with the music also took
+ * every sound effect with it -- and silently, since audio failure is not fatal
+ * to startup and there is no on-screen indication.
+ *
+ * Missing entries stay NULL and the play* functions below skip them, so a
+ * partial load degrades to "no music" or "one missing effect" rather than
+ * "no audio at all". useAudio is only cleared if nothing loaded whatsoever.
+ */
 static void loadSounds() {
   int i;
+  int musicOk = 0, chunkOk = 0;
   char name[32];
 
   for ( i=0 ; i<MUSIC_NUM ; i++ ) {
-    strcpy(name, "sounds/");
-    strcat(name, musicFileName[i]);
-    if ( NULL == (music[i] = Mix_LoadMUS(name)) ) {
-      fprintf(stderr, "Couldn't load: %s\n", name);
-      useAudio = 0;
-      return;
+    int e;
+    music[i] = NULL;
+    for ( e=0 ; e<MUSIC_EXT_NUM && !music[i] ; e++ ) {
+      strcpy(name, "sounds/");
+      strcat(name, musicFileName[i]);
+      strcat(name, musicExt[e]);
+      music[i] = Mix_LoadMUS(name);
+      if ( music[i] && e > 0 ) {
+        /* Worth knowing: it means the preferred container was rejected. */
+        printf("Audio: %s fell back to %s\n", musicFileName[i], musicExt[e]);
+      }
+    }
+    if ( music[i] ) {
+      musicOk++;
+    } else {
+      fprintf(stderr, "Couldn't load %s (tried all %d containers), skipping\n",
+              musicFileName[i], MUSIC_EXT_NUM);
     }
   }
   for ( i=0 ; i<CHUNK_NUM ; i++ ) {
     strcpy(name, "sounds/");
     strcat(name, chunkFileName[i]);
-    if ( NULL == (chunk[i] = Mix_LoadWAV(name)) ) {
-      fprintf(stderr, "Couldn't load: %s\n", name);
-      useAudio = 0;
-      return;
+    chunk[i] = Mix_LoadWAV(name);
+    if ( chunk[i] ) {
+      chunkOk++;
+    } else {
+      fprintf(stderr, "Couldn't load (skipping): %s\n", name);
     }
+  }
+
+  /* Always report the tally. A partial load used to be invisible, which is how
+     "no sound on that browser" turns into a long hunt somewhere else. */
+  printf("Audio: %d/%d music, %d/%d effects loaded\n",
+         musicOk, MUSIC_NUM, chunkOk, CHUNK_NUM);
+
+  if ( musicOk == 0 && chunkOk == 0 ) {
+    fprintf(stderr, "Audio: nothing loaded, disabling sound\n");
+    useAudio = 0;
   }
 }
 
@@ -127,6 +189,7 @@ void initSound() {
 
 void playMusic(int idx) {
   if ( !useAudio ) return;
+  if ( idx < 0 || idx >= MUSIC_NUM || !music[idx] ) return;   /* skipped at load */
   Mix_PlayMusic(music[idx], -1);
 }
 
@@ -144,10 +207,12 @@ void stopMusic() {
 
 void playChunk(int idx) {
   if ( !useAudio ) return;
+  if ( idx < 0 || idx >= CHUNK_NUM || !chunk[idx] ) return;    /* skipped at load */
   Mix_PlayChannel(chunkChannel[idx], chunk[idx], 0);
 }
 
 void haltChunk(int idx) {
   if ( !useAudio ) return;
+  if ( idx < 0 || idx >= CHUNK_NUM ) return;
   Mix_HaltChannel(chunkChannel[idx]);
 }
