@@ -351,9 +351,12 @@
     status.textContent = msg;
   };
 
+  let runtimeReady = false;
+
   window.Module = {
     canvas,
     setStatus,
+    onRuntimeInitialized() { runtimeReady = true; },
     print:    (...a) => console.log(...a),
     printErr: (...a) => console.error(...a),
     totalDependencies: 0,
@@ -475,7 +478,7 @@
       // Reveal on the first frame after the runtime is live, never before: the
       // panel used to be shown at parse time, which aborted startup inside
       // initSDL before SDL_SetVideoMode ever ran.
-      if (wantDiag && window.Module && Module.calledRun) { wantDiag = false; diagEl.hidden = false; }
+      if (wantDiag && runtimeReady) { wantDiag = false; diagEl.hidden = false; }
       if (!diagEl.hidden) showDiag();
       requestAnimationFrame(tick);
     };
@@ -561,8 +564,17 @@
   let tapUntil = 0, pauseUntil = 0;
 
   const push = () => {
+    /* Gate on the runtime actually being up, NOT on the export existing.
+       Emscripten installs an asserting stub for every exported function before
+       initialization, so `Module._rr_set_touch` is already truthy and calling it
+       aborts the whole runtime with "native function called before runtime
+       initialization". On iOS (pointer: coarse) matches, so the touch surface is
+       live while the 3.7 MB payload is still loading and the first tap -- the one
+       on "Tap to play" -- killed startup. Desktop never saw it because the touch
+       UI is only enabled manually there, after load. */
+    if (!runtimeReady) return;
     const fn = window.Module && window.Module._rr_set_touch;
-    if (!fn) return;
+    if (typeof fn !== 'function') return;
     const now = Date.now();
     let dirX = 0, dirY = 0;
     if (drag.id !== null) {
