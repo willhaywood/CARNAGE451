@@ -19,7 +19,8 @@ with assertions enabled.
 | Boss, ship, bullets, lasers, explosions | works |
 | Bullet trajectories / BulletML formulas | works |
 | Simulation (rank, collision, scoring, boss HP) | works |
-| Audio (3 Ogg BGM + 16 WAV SFX) | works — verified instrumentally, see below |
+| Audio (3 MP3 BGM + 16 WAV SFX) | works — verified instrumentally, see below |
+| Touch controls (landscape, Normal mode) | implemented — not yet played on hardware |
 
 ## Build
 
@@ -29,6 +30,9 @@ regenerate it from `bml/calc.yy` (macOS system bison 2.3 is sufficient).
 ```bash
 cd build && make -f Makefile.emcc
 ```
+
+The page is generated from `build/shell.html` via `--shell-file`. **Edit that, not `rr.html`** —
+`rr.html` is build output and is overwritten every time.
 
 Serve it with the bundled no-cache server and open `rr.html`:
 
@@ -175,6 +179,142 @@ the hardcoded `GL_RGB` would misread rows and overrun the last one.
 **`Mix_QuerySpec` is skipped.** Emscripten's SDL_mixer aborts on it. Its outputs were written into
 locals that are never read.
 
+## Page shell
+
+`build/shell.html` replaces emscripten's stock template, which shipped an emscripten logo and
+banner, a console `<textarea>`, and unstyled checkboxes. The replacement is a dark, self-contained
+page — no external fonts, scripts, or images, so nothing extra to fetch and nothing to break the CSP
+on a static host.
+
+- **Loading state**: wordmark, progress bar driven by `monitorRunDependencies` (indeterminate sweep
+  until byte counts arrive), fading out when the runtime is ready. `window.onerror` swaps it for a
+  readable failure message instead of leaving a black rectangle.
+- **Console output is gone from the page.** `Module.print`/`printErr` now go to the devtools console
+  only. The barrage filenames the game prints at startup are diagnostics, not UI.
+- **Click-to-play gate**, because browsers need a trusted gesture before audio starts. It doubles as
+  the thing that puts keyboard focus on the canvas for SDL. Dismissed by click *or* keypress.
+- **Controls legend and a fullscreen button**, revealed on hover so they stay out of the way.
+- Arrow keys and space are `preventDefault`ed so the page can't scroll under the game.
+
+### Canvas sizing contract
+
+Layout is owned entirely by CSS: the canvas is 100% of a 4:3 `#frame` sized to fit the viewport.
+`syncCanvasToDisplay()` in `screen.c` only *reads* that size back and matches the framebuffer to it
+(x `devicePixelRatio`, capped — see below). **Do not set width/height attributes on the canvas in the
+shell**; the two would fight.
+
+The fullscreen rule sizes the *canvas* to 4:3 inside a full-screen frame rather than sizing the frame
+itself to `100vw/100vh` — the latter overrides `aspect-ratio` and hands the canvas a non-4:3 box. The
+game's own viewport letterboxing hides that, but only by drawing a second set of bars.
+
+The shell also bypasses `Module.requestFullscreen` in favour of `frame.requestFullscreen()`, because
+emscripten's version rewrites `canvas.width`/`height` and fights the sizing above.
+
+Verified: 4:3 preserved and no page scrolling at 375x812 (mobile) through 1600px-wide desktop;
+960x720 CSS / 1920x1440 backing store at `devicePixelRatio` 2.
+
+### A note on `-sASSERTIONS`
+
+Left at `1` deliberately. Turning it off saves 43 KB of `rr.js` (8% of that file, but only 0.9% of
+the 4.6 MB payload) — not worth it here, because assertions are what make the immediate-mode GL
+regression described above fail loudly instead of silently drawing nothing. Flip it in
+`Makefile.emcc` if you disagree; the tradeoff is one line.
+
+## Touch controls
+
+Landscape, Normal mode. **Verified in a desktop browser with synthetic pointer events; not yet
+played on a phone.**
+
+### Scheme
+
+- **Move — drag anywhere, 1:1 with the thumb.** No joystick and no fixed zone; the whole screen is
+  the surface. The ship travels exactly as far as the finger does and **stops the instant the finger
+  stops**. It is never required to sit on the ship, which in a bullet hell would hide the one thing
+  you must see.
+- **Fire — automatic** while a finger is down. No button.
+- **Bomb — the only visible control**, in the dead space right of the playfield.
+- **Pause — two-finger tap.** Fires when the second finger lands rather than on release, so it
+  responds immediately. The bomb button stops propagation, so reaching for it never counts as the
+  second finger.
+- **Speed comes from drag distance**, not just direction. See below — this is load-bearing.
+
+### Positional, not velocity — this is the whole thing
+
+The first attempt was a velocity model: hold the finger offset from where it landed, and the ship
+keeps moving in that direction. **That cannot do tight movement.** Stopping requires returning the
+finger to an invisible origin, so every small correction overshoots. It was rejected in play for
+exactly that reason.
+
+What ships instead is positional. The shell integrates the finger's travel and reports the
+accumulated total, converted to field units. `touch.c` snapshots `ship.pos` on the touch-down edge
+and treats base + accumulated as a **target**; `ship.c` closes the gap to it, capped at `ship.speed`
+per frame. When the thumb stops, the gap is zero and so is the movement.
+
+Accumulated travel rather than per-frame deltas, so it is idempotent: C can read it any number of
+times per frame, or miss a push entirely, without drifting.
+
+Measured, in game: a 40px drag moved the ship 6259 field units against 6259 expected — exact 1:1,
+40.0px on screen — and after 40 further frames holding still the drift was **0 units**.
+
+`TOUCH.gain` is 1.0 (true 1:1). Raise it for faster traversal at the cost of fine control. The
+`ship.speed` clamp still applies, so a fast flick is followed at the ship's own maximum rather than
+teleporting.
+
+The pixel→field factor is one number for both axes: the playfield is the centre half of the 4:3
+canvas and 320×480 field units in 8.8, which works out to `163840 / canvasCssWidth` either way.
+
+### Why the focus-slow is suppressed
+
+In Normal mode `PAD_BUTTON1` is *both* fire and the focus-slow (`ship.c`): holding it drops the ship
+from `SHIP_SPEED` 1000 to `SHIP_SLOW_SPEED` 500. Autofire holds that button permanently.
+
+Under positional control `ship.speed` is only a rate ceiling — precision comes from the finger — so
+leaving the focus-slow active would just halve the ceiling and make the ship lag behind the thumb.
+`rrTouchAutofire()` therefore suppresses it. This is the only divergence from the original input
+model.
+
+### Why autofire is gated on IN_GAME
+
+The menus read the same `PAD_BUTTON1`. Firing merely because a finger is down would select an entry
+the instant the screen was touched, making navigation impossible. `rrTouchButtons()` therefore only
+adds BUTTON1 from autofire when `status == IN_GAME`; menus are driven by a separate short **tap**
+pulse (press under 250ms that moved less than 12px, held for 140ms so the fixed-step sim can't miss
+it) plus the synthesized d-pad from dragging.
+
+### Testing it with a mouse
+
+Pointer Events already deliver mouse input to the same handlers, so the whole scheme can be exercised
+on a desktop — only the UI needed a way to appear on a device that reports a fine pointer.
+
+- **`?touch=1`** on the URL, or the **Touch test** button in the toolbar.
+- Left-drag anywhere = move (and autofire, exactly as a finger does).
+- **Right-click = pause**, standing in for the two-finger tap. The context menu is suppressed on the
+  drag surface.
+
+In this mode the keyboard legend stays visible so the toggle remains reachable; on a real touch
+device it is hidden as before.
+
+### Architecture
+
+All touch handling is in `shell.html`, pushed into C through one exported function:
+
+```c
+rr_set_touch(mx, my, moving, touching, tap, bomb, pause)
+```
+
+`screen.c` ORs the result into `getPadState()`/`getButtonState()` — both additive, so the keyboard
+and joystick paths are untouched and desktop is unaffected. Tuning constants live in the `TOUCH`
+object in the shell, so the deadzone, ramp and leash can be adjusted on a device with a reload rather
+than a wasm rebuild.
+
+### Not done
+
+- Portrait (needs the HUD reflowed out of the side boards).
+- PSY/IKA/GW BUTTON2 semantics — hold, edge-trigger and hold-to-charge respectively. Note that PSY
+  and GW also interact with `ship.speed`, so the speed-ramp decision above will need revisiting for
+  them.
+- Any real-device play test. The deadzone/ramp/leash numbers are starting values, not tuned.
+
 ## Deploying
 
 The build is a fully static bundle — `rr.html` (rename to `index.html`), `rr.js`, `rr.wasm`,
@@ -192,7 +332,8 @@ cannot set. This build is single-threaded — no `-pthread`, and `rr.js` referen
 - MIME types from a default static server are correct: `.wasm` → `application/wasm`, `.data` →
   `application/octet-stream` (emscripten fetches it as an ArrayBuffer, so the type is irrelevant).
 - No absolute URLs or hardcoded origins in the runtime path (the `http://` strings in `rr.js` are
-  doc-comment links in emscripten's runtime, not fetched).
+  doc-comment links in emscripten's runtime, not fetched). The shell is self-contained too — inline
+  CSS and JS, an inline SVG favicon, no web fonts — so there are no third-party requests at all.
 
 `.github/workflows/deploy-reference.yml` builds and publishes on push. It adds `.nojekyll` so Jekyll
 doesn't mangle the payload, and copies `rr.html` to `index.html`. Enable once under
@@ -302,13 +443,46 @@ autoplay policy is not blocking playback.
 This verification is instrumental, not auditory — the checks above establish that decoded audio is
 playing at full volume, but nobody listened to it.
 
-Two caveats:
+### BGM encoding
+
+The three music tracks ship as **MP3 only** (mono, 96 kbps, matching the original Vorbis bitrate).
+`loadSounds()` probes `.mp3` then `.ogg` and keeps the first that decodes, so dropping the original
+Vorbis files back into `rr/sounds/` works with no code change — they are the better encode, since the
+MP3 is a lossy-to-lossy transcode of them. The 16 effects are `.wav`, which every browser decodes, so
+they need no fallback.
+
+**Why MP3 and not AAC/`.m4a`, which was the obvious choice and was tried first.** Emscripten's asset
+preloader only decodes `.ogg`, `.wav` and `.mp3` (`audioPlugin.canHandle` in
+`src/lib/libbrowser.js`). An `.m4a` is packaged but never decoded — and `Mix_LoadMUS` still returns a
+**non-NULL handle** for it, so the load reports success and then plays silence. Confirmed by
+inspection: with `.m4a` the three `SDL.audios` entries had no duration and no source, against real
+durations for everything else. That is precisely the silent-failure mode the loader fix above exists
+to eliminate, so it was abandoned. MP3 is decoded by the toolchain and supported by every browser
+including all iOS versions, so it buys the same compatibility with none of that.
+
+**Why Ogg was dropped rather than kept as a fallback.** Emscripten packages assets into a single blob
+with no content negotiation, so shipping both meant every visitor downloading both encodings —
+`rr.data` went from 3.9 MB to 6.1 MB. MP3 alone covers every browser, so the second copy bought
+nothing but bytes:
+
+| Packaged | `rr.data` |
+|---|---|
+| Ogg only (original) | 3.94 MB |
+| Ogg + MP3 | 6.12 MB |
+| **MP3 only (current)** | **3.66 MB** |
+
+Verified: `Audio: 3/3 music, 16/16 effects loaded`, package manifest contains 16 `.wav` + 3 `.mp3` and
+no `.ogg`, and the decoded durations are 66.2 / 37.2 / 77.4 s — matching the sources exactly.
+
+Two caveats:Two caveats:
 
 - **`Mix_QuerySpec` aborts** in emscripten and is skipped under `#ifdef __EMSCRIPTEN__` (see below).
-- **Ogg is a Chrome-shaped assumption.** `loadSounds()` bails out on the *first* failed file and sets
-  `useAudio = 0`, so in a browser that cannot decode Ogg Vorbis, the BGM failing would silently take
-  all 16 sound effects down with it. That is fine for a reference oracle running in Chrome; the
-  TypeScript port should ship Opus-in-WebM with an AAC fallback instead, as `../PLAN.md` says.
+- **The loader is now non-fatal** (it wasn't originally — see below). A file that fails to load is
+  skipped, the entry stays NULL, and `playMusic`/`playChunk` skip NULL entries, so a partial load
+  degrades to "no music" or "one missing effect" rather than "no audio at all". `useAudio` is cleared
+  only if *nothing* loaded.
+- The tally is always printed — `Audio: 3/3 music, 16/16 effects loaded` — so a partial load is
+  visible instead of silent.
 
 ## Note for anyone debugging this further
 

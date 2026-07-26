@@ -4,6 +4,8 @@ A faithful web port of [rRootage](https://github.com/abagames/rrootage) (Kenta C
 
 **Scope decisions:** desktop browser only · faithful port of all four modes · TypeScript rewrite (not Emscripten).
 
+> Touch/mobile was later explored for the reference build — see [reference/TOUCH-PLAN.md](reference/TOUCH-PLAN.md). Two findings transfer to the TS port regardless of whether touch ships: the ship's movement is a *normalized* 8.8 unit-vector table (`shipMv`) scaled by `ship.speed`, so analog direction is a drop-in that preserves every speed mechanic; and in Normal mode the fire button is also the focus-slow, which rules out always-on autofire.
+
 ---
 
 ## 1. What the original actually is
@@ -140,7 +142,7 @@ Semantics to get right:
 
 19 files: 16 `.wav` SFX + 3 `.ogg` BGM (`stg_a/b/c`).
 
-- **Re-encode the BGM.** Safari's Ogg Vorbis support is unreliable; ship Opus-in-WebM with an AAC/m4a fallback.
+- **Re-encode the BGM.** Safari's Ogg Vorbis support is unreliable; ship Opus-in-WebM with an AAC/m4a fallback. In the TS port this is free — `<audio>` with multiple `<source>` elements negotiates per browser and only fetches one. Note the reference build could *not* use AAC: emscripten's asset preloader decodes only `.ogg`/`.wav`/`.mp3`, and silently hands back a working-looking handle for anything else. That constraint is emscripten's, not the browser's, so it does not apply to the TS port.
 - WAVs decode natively everywhere — leave them alone.
 - One `AudioContext`, resumed on first input gesture (browsers block autoplay).
 - Schedule on the audio clock, never `setTimeout`.
