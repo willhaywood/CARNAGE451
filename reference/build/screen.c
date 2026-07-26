@@ -141,24 +141,100 @@ static void rrEnd(void) {
 
 static int screenWidth, screenHeight;
 
+/*
+ * Layout.
+ *
+ * The playfield is not rendered separately from the side boards: the 3D scene is
+ * drawn across the whole viewport and drawSideBoards() paints black over the
+ * outer thirds, cropping it to the centre 320 of 640. The field measures
+ * 4.096 x 6.144 world units against a 6.213 half-height frustum at zoom 15, so
+ * it fills the height and almost exactly half the width of a 4:3 viewport --
+ * which is why the 160-wide boards line up with it.
+ *
+ * Portrait therefore comes almost free: hand the scene a 2:3 viewport instead
+ * and the field fills the width edge to edge with no masking, leaving spare
+ * height above and below for the HUD. The HUD needs no redrawing, only
+ * re-placing, since its ortho pass keeps x at 0..640 and simply extends in y.
+ */
+static int   rrPortrait  = 0;      /* chosen from the framebuffer aspect */
+static int   vpX, vpY, vpW, vpH;   /* the 3D viewport, in pixels */
+static float rrHudScale  = 1.0f;   /* pixels per HUD unit */
+static float rrHudBottom = 480.0f; /* HUD y at the bottom of the screen */
+static float rrFieldTop  = 0.0f;   /* HUD y of the field's top edge */
+static float rrFieldBot  = 480.0f; /* ...and its bottom edge */
+
+/* HUD units kept clear above the field. The score occupies y 14..52 at size 28;
+   the rest is inset so it is not flush against the bezel or a notch. The
+   remaining slack all goes below the field, for LEFT/BOMB and the thumb. */
+#define RR_TOP_STRIP    82
+#define RR_SCORE_INSET  16
+
+/* Bounding box of what drawRPanel() actually draws, which is not obvious from its
+   arguments: the STAGE/scene block starts at (604, 24) and LEFT/BOMB at (520,
+   280), all drawn downward, reaching about y 440. Used to fit it to the strip. */
+#define RR_PANEL_X    520
+#define RR_PANEL_Y     24
+#define RR_PANEL_H    420
+#define RR_PANEL_PAD   10
+
 // Reset viewport when the screen is resized.
 static void screenResized() {
-  int viewportWidth = screenWidth;
-  int viewportHeight = screenHeight;
-  // Maintain aspect ratio between SCREEN_WIDTH and SCREEN_HEIGHT.
-  if (screenHeight * SCREEN_WIDTH  > screenWidth * SCREEN_HEIGHT) {
-    viewportHeight = SCREEN_HEIGHT * screenWidth / SCREEN_WIDTH;
+  if (screenHeight * SCREEN_WIDTH <= screenWidth * SCREEN_HEIGHT) {
+    /* 4:3 or wider -- the original letterbox, boards masking the sides. */
+    rrPortrait = 0;
+    vpW = SCREEN_WIDTH * screenHeight / SCREEN_HEIGHT;
+    vpH = screenHeight;
+    if (vpW > screenWidth) { vpW = screenWidth; vpH = SCREEN_HEIGHT * screenWidth / SCREEN_WIDTH; }
+    vpX = (screenWidth - vpW) / 2;
+    vpY = (screenHeight - vpH) / 2;
+    rrHudScale  = (float)vpW / (float)SCREEN_WIDTH;
+    rrHudBottom = 480.0f;
+    rrFieldTop  = 0.0f;
+    rrFieldBot  = 480.0f;
   } else {
-    viewportWidth = SCREEN_WIDTH * screenHeight / SCREEN_HEIGHT;
+    /* Taller than 4:3: the field gets its own 2:3 viewport across the full
+       width. HUD x stays 0..640 mapped to the screen width so nothing that
+       draws into it gets clipped; y just extends past 480. */
+    int topPx;
+    rrPortrait  = 1;
+    rrHudScale  = (float)screenWidth / (float)SCREEN_WIDTH;
+    topPx       = (int)(RR_TOP_STRIP * rrHudScale);
+    vpW = screenWidth;
+    vpH = vpW * 3 / 2;
+    if (topPx + vpH > screenHeight) {
+      /* Not enough height for a full-width field plus the score strip. */
+      vpH = screenHeight - topPx;
+      if (vpH < 1) { vpH = screenHeight; topPx = 0; }
+      vpW = vpH * 2 / 3;
+    }
+    vpX = (screenWidth - vpW) / 2;
+    vpY = screenHeight - topPx - vpH;      /* GL y counts from the bottom */
+    rrHudBottom = (float)screenHeight / rrHudScale;
+    rrFieldTop  = (float)topPx / rrHudScale;
+    rrFieldBot  = rrFieldTop + (float)vpH / rrHudScale;
   }
-  int offsetX = (screenWidth - viewportWidth) / 2;
-  int offsetY = (screenHeight - viewportHeight) / 2;
-  glViewport(offsetX, offsetY, viewportWidth, viewportHeight);
+
+  glViewport(vpX, vpY, vpW, vpH);
   glMatrixMode(GL_PROJECTION);
   glLoadIdentity();
-  gluPerspective(45.0f, (GLfloat)viewportWidth/(GLfloat)viewportHeight, 0.1f, FAR_PLANE);
+  gluPerspective(45.0f, (GLfloat)vpW/(GLfloat)vpH, 0.1f, FAR_PLANE);
   glMatrixMode(GL_MODELVIEW);
 }
+
+/* Exposed so the shell can lay the touch controls out against the same
+   geometry the renderer is using. */
+#ifdef __EMSCRIPTEN__
+/*
+ * Width of the playfield itself, in framebuffer pixels.
+ *
+ * The shell needs this to convert finger travel into field units, and it is not
+ * the viewport width: in landscape the scene viewport is 4:3 and the field is
+ * the masked centre half of it, while in portrait the viewport *is* the field.
+ * Getting this wrong moves the ship at double or half speed.
+ */
+EMSCRIPTEN_KEEPALIVE
+int rr_field_px_width(void) { return rrPortrait ? vpW : vpW / 2; }
+#endif
 
 void resized(int width, int height) {
   screenWidth = width; screenHeight = height;
@@ -1042,7 +1118,15 @@ void startDrawBoards() {
   glMatrixMode(GL_PROJECTION);
   glPushMatrix();
   glLoadIdentity();
-  glOrtho(0, 640, 480, 0, -1, 1);
+  if ( rrPortrait ) {
+    /* Cover the whole framebuffer so the strips above and below the field are
+       drawable, and extend the ortho box in y only. x stays 0..640, so every
+       existing HUD position remains on screen at its designed scale. */
+    glViewport(0, 0, screenWidth, screenHeight);
+    glOrtho(0, SCREEN_WIDTH, rrHudBottom, 0, -1, 1);
+  } else {
+    glOrtho(0, 640, 480, 0, -1, 1);
+  }
   glMatrixMode(GL_MODELVIEW);
   glPushMatrix();
   glLoadIdentity();
@@ -1064,6 +1148,35 @@ static void drawBoard(int x, int y, int width, int height) {
 }
 
 void drawSideBoards() {
+  if ( rrPortrait ) {
+    /* No masking needed: the field exactly fills its own viewport, and glClear
+       has already blacked out everything outside it.
+
+       Both HUD panels are re-placed rather than redrawn. The score is inset from
+       the top-left corner so it clears a notch. The right panel is a single tall
+       column -- everything in it is drawn downward with drawString's d=1 -- so it
+       is mapped as a block into the strip below the field. It is taller than the
+       strip, hence the scale; a plain translation would push it back over the
+       playfield. */
+    float s, tx, ty;
+    glPushMatrix();
+    glTranslatef(RR_SCORE_INSET, RR_SCORE_INSET, 0);
+    drawScore();
+    glPopMatrix();
+
+    s = (rrHudBottom - rrFieldBot - 2.0f * RR_PANEL_PAD) / (float)RR_PANEL_H;
+    if ( s > 1.0f ) s = 1.0f;
+    /* glTranslate then glScale maps p -> s*p + t, so solve t for the corner of
+       the panel's own bounding box landing at the top-left of the strip. */
+    tx = RR_SCORE_INSET      - s * (float)RR_PANEL_X;
+    ty = rrFieldBot + RR_PANEL_PAD - s * (float)RR_PANEL_Y;
+    glPushMatrix();
+    glTranslatef(tx, ty, 0);
+    glScalef(s, s, 1.0f);
+    drawRPanel();
+    glPopMatrix();
+    return;
+  }
   glDisable(GL_BLEND);
   drawBoard(0, 0, 160, 480);
   drawBoard(480, 0, 160, 480);

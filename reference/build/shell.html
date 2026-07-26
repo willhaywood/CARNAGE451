@@ -66,6 +66,19 @@
     max-height: 1200px;
   }
 
+  /* Taller than 4:3: hand the whole viewport to the canvas. screenResized() sees
+     the portrait framebuffer and gives the field its own 2:3 viewport across the
+     full width, which is the entire point -- a 4:3 letterbox would leave the
+     playfield at about a third of the screen height. */
+  @media (max-aspect-ratio: 4/3) {
+    #frame {
+      aspect-ratio: auto;
+      width: 100vw;  height: 100vh;
+      width: 100vw;  height: 100dvh;
+      max-width: none; max-height: none;
+    }
+  }
+
   /* Fullscreen: the frame covers the screen, and the canvas keeps 4:3 centred
      inside it. Sizing the *frame* to 100vw/100vh instead would override
      aspect-ratio and hand the canvas a non-4:3 box — the game's own viewport
@@ -229,6 +242,17 @@
     bottom: calc(10% + env(safe-area-inset-bottom, 0px));
   }
 
+  /* In portrait the field runs the full width, so there is no dead space beside
+     it — the button goes in the strip underneath instead, opposite the LEFT/BOMB
+     readout which the renderer places on the left of that strip. */
+  @media (max-aspect-ratio: 4/3) {
+    #bBomb {
+      width: 84px; height: 84px;
+      right: calc(6% + env(safe-area-inset-right, 0px));
+      bottom: calc(2% + env(safe-area-inset-bottom, 0px));
+    }
+  }
+
   /* ---- on-device diagnostics ---- */
 
   /* Readable on a phone without tethering to a Mac. Shown by ?diag=1, and
@@ -246,24 +270,6 @@
   #diag[hidden] { display: none; }
   #diag b { color: var(--warn); font-weight: 600; }
   #diag .err { color: var(--danger); }
-
-  /* ---- rotate prompt ---- */
-
-  #rotate {
-    position: fixed; inset: 0; z-index: 6;
-    display: none; place-content: center; justify-items: center; gap: 1rem;
-    background: var(--bg); text-align: center; padding: 2rem;
-  }
-  /* Only nag on touch devices in portrait — a narrow desktop window is fine. */
-  @media (orientation: portrait) and (pointer: coarse) {
-    body.touch #rotate { display: grid; }
-  }
-  #rotate svg { width: 56px; height: 56px; stroke: var(--accent); fill: none; stroke-width: 1.5; }
-  #rotate b {
-    font-size: .8rem; font-weight: 600; letter-spacing: .18em;
-    text-transform: uppercase; color: var(--fg);
-  }
-  #rotate small { color: var(--dim); font-size: .7rem; letter-spacing: .06em; max-width: 22rem; }
 
   @media (prefers-reduced-motion: reduce) {
     #loader, #bar > i, #hud, #stick, .tbtn { transition: none; }
@@ -305,12 +311,6 @@
 </div>
 
 <pre id="diag" hidden></pre>
-
-<div id="rotate">
-  <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M8 3.5 10.5 6 8 8.5"/></svg>
-  <b>Rotate your device</b>
-  <small>rRootage plays in landscape — the field is tall and narrow, and the side panels are where your thumbs go.</small>
-</div>
 
 <script>
 (() => {
@@ -593,13 +593,24 @@
     dirPx:    10,   // offset before a menu direction is reported
   };
 
-  // The playfield is the centre half of the 4:3 canvas and 320x480 field units
-  // across, stored in 8.8. Both axes work out to the same scale, so one factor
-  // converts CSS pixels to field units: (320<<8) / (cssWidth/2) = 163840/cssWidth.
-  const FIELD_SCALE_NUM = 163840;
+  // The field is 320x480 field units across, stored in 8.8, so it is (320<<8) =
+  // 81920 units wide. Both axes work out to the same scale, so one factor
+  // converts CSS pixels to field units: 81920 / fieldWidthInCssPx.
+  //
+  // How wide the field is on screen depends on the orientation -- in landscape it
+  // is the masked centre half of a 4:3 viewport, in portrait it is the whole
+  // viewport -- so the renderer is asked rather than assumed. Halving or doubling
+  // this silently doubles or halves how far the ship travels per finger travel.
+  const FIELD_UNITS_WIDE = 81920;
   const fieldPerPx = () => {
-    const w = canvas.getBoundingClientRect().width;
-    return w > 0 ? FIELD_SCALE_NUM / w : 0;
+    const cssW = canvas.getBoundingClientRect().width;
+    if (!(cssW > 0) || !canvas.width) return 0;
+    let fieldFbPx = 0;
+    try { fieldFbPx = runtimeReady ? Module._rr_field_px_width() : 0; } catch (e) {}
+    // Before the first frame, fall back to the landscape assumption.
+    if (!(fieldFbPx > 0)) fieldFbPx = canvas.width / 2;
+    const fieldCssPx = fieldFbPx * (cssW / canvas.width);
+    return fieldCssPx > 0 ? FIELD_UNITS_WIDE / fieldCssPx : 0;
   };
 
   const surface = document.getElementById('dragsurface');
