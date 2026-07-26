@@ -229,6 +229,24 @@
     bottom: calc(10% + env(safe-area-inset-bottom, 0px));
   }
 
+  /* ---- on-device diagnostics ---- */
+
+  /* Readable on a phone without tethering to a Mac. Shown by ?diag=1, and
+     automatically whenever something throws, because the failure we most need
+     to see is the one that happens where there is no console. */
+  #diag {
+    position: fixed; left: 0; right: 0; top: 0;
+    max-height: 55vh; overflow: auto; z-index: 7;
+    margin: 0; padding: 10px 12px;
+    background: rgba(5,7,12,.94); color: var(--accent);
+    border-bottom: 1px solid var(--accent);
+    font: 11px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word;
+    -webkit-user-select: text; user-select: text;   /* so it can be copied out */
+  }
+  #diag[hidden] { display: none; }
+  #diag b { color: var(--warn); font-weight: 600; }
+  #diag .err { color: var(--danger); }
+
   /* ---- rotate prompt ---- */
 
   #rotate {
@@ -285,6 +303,8 @@
     <div class="tbtn" id="bBomb">Bomb</div>
   </div>
 </div>
+
+<pre id="diag" hidden></pre>
 
 <div id="rotate">
   <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M8 3.5 10.5 6 8 8.5"/></svg>
@@ -351,8 +371,120 @@
 
   setStatus('Downloading');
 
-  window.addEventListener('error', () => fail('Failed to start — see the browser console.'));
-  window.addEventListener('unhandledrejection', () => fail('Failed to start — see the browser console.'));
+  /* ---------------- diagnostics ----------------
+     The previous version of this reported a generic "Failed to start" and threw
+     the actual message away, which is useless on a device with no console. */
+
+  const diagEl = document.getElementById('diag');
+  const errors = [];
+  let drawCalls = 0, drawCallsPeak = 0, contextLost = false;
+
+  /* Observe the context rather than asking for one. Calling getContext()
+     ourselves before emscripten does hands it a context created with the wrong
+     attributes -- which silently broke startup the first time this panel was
+     added, leaving the canvas at its default 300x150. */
+  let glRef = null;
+  (() => {
+    const proto = HTMLCanvasElement.prototype, orig = proto.getContext;
+    proto.getContext = function (type, ...rest) {
+      const ctx = orig.call(this, type, ...rest);
+      if (!glRef && ctx && /webgl/i.test(type)) glRef = ctx;
+      return ctx;
+    };
+  })();
+
+  const env = () => {
+    const c = canvas, r = c.getBoundingClientRect();
+    const gl = glRef;
+    let renderer = 'n/a', ver = gl ? 'pending' : 'not created yet', maxVp = 'n/a';
+    if (gl) {
+      ver = gl.getParameter(gl.VERSION);
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      if (dbg) renderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL);
+      const v = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+      if (v) maxVp = v[0] + 'x' + v[1];
+    }
+    // Never touch Module.HEAP8 / HEAPU8 and friends: emscripten's getters call
+    // abort() when the symbol was not exported, which takes the whole runtime
+    // down. Reading it here is what made ?diag=1 kill startup.
+    let heap = 'n/a';
+    try {
+      const buf = window.Module && Module.wasmMemory && Module.wasmMemory.buffer;
+      if (buf) heap = (buf.byteLength / 1048576).toFixed(1) + ' MB';
+    } catch (_) { /* not exported either — leave as n/a */ }
+    return [
+      'ua        ' + navigator.userAgent,
+      'viewport  ' + innerWidth + 'x' + innerHeight + '  dpr ' + devicePixelRatio,
+      'canvas    css ' + Math.round(r.width) + 'x' + Math.round(r.height) +
+        '   backing ' + c.width + 'x' + c.height,
+      'fb cap    ' + (window.rrFbCap || 'default') + (contextLost ? '   <b>WEBGL CONTEXT LOST</b>' : ''),
+      'webgl     ' + ver,
+      'renderer  ' + renderer,
+      'max vp    ' + maxVp,
+      'wasm heap ' + heap,
+      'draws/frm ' + drawCalls + '  peak ' + drawCallsPeak,
+    ].join('\n');
+  };
+
+  let wantDiag = false;
+
+  const showDiag = () => {
+    diagEl.hidden = false;
+    diagEl.innerHTML = '<b>rRootage diagnostics</b>\n' + env() +
+      (errors.length ? '\n\n<span class="err">' + errors.slice(-6).join('\n') + '</span>' : '');
+  };
+
+  const note = (s) => { errors.push(s); wantDiag = false; showDiag(); };
+
+  window.addEventListener('error', (e) => {
+    // Report verbatim. e.error?.stack is the useful part when it is a wasm trap.
+    const where = e.filename ? ' @' + e.filename.split('/').pop() + ':' + e.lineno : '';
+    note('ERROR ' + (e.message || '(no message)') + where);
+    if (e.error && e.error.stack) note(String(e.error.stack).split('\n').slice(0, 4).join('\n'));
+    fail(e.message || 'Failed to start');
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    note('REJECTED ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason)));
+    fail('Failed to start');
+  });
+
+  // WebKit drops WebGL contexts aggressively under memory pressure. The stock
+  // emscripten shell alerted on this; that was lost in the rewrite, so a lost
+  // context looked like an unexplained freeze.
+  canvas.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    contextLost = true;
+    note('WEBGL CONTEXT LOST — usually GPU memory pressure. Try a smaller ?fb=N');
+  });
+  canvas.addEventListener('webglcontextrestored', () => note('webgl context restored'));
+
+  // Count draw calls per frame: the retained-mode batcher issues one
+  // glDrawArrays per primitive from client-side arrays, which WebKit copies into
+  // a temp buffer each time. If this number is in the hundreds it is the leading
+  // suspect for the crash-after-a-few-seconds.
+  (() => {
+    const protos = [window.WebGLRenderingContext, window.WebGL2RenderingContext].filter(Boolean);
+    let n = 0;
+    for (const P of protos) {
+      const orig = P.prototype.drawArrays;
+      if (!orig) continue;
+      P.prototype.drawArrays = function (...a) { n++; return orig.apply(this, a); };
+    }
+    const tick = () => {
+      drawCalls = n; if (n > drawCallsPeak) drawCallsPeak = n; n = 0;
+      // Reveal on the first frame after the runtime is live, never before: the
+      // panel used to be shown at parse time, which aborted startup inside
+      // initSDL before SDL_SetVideoMode ever ran.
+      if (wantDiag && window.Module && Module.calledRun) { wantDiag = false; diagEl.hidden = false; }
+      if (!diagEl.hidden) showDiag();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  })();
+
+  const params = new URLSearchParams(location.search);
+  if (params.has('fb')) window.rrFbCap = parseInt(params.get('fb'), 10) || 0;
+  if (params.has('diag')) wantDiag = true;   // revealed by the frame ticker
 
   const dismissGate = () => { gate.hidden = true; canvas.focus(); };
   gate.addEventListener('click', dismissGate);

@@ -213,10 +213,20 @@ void resized(int width, int height) {
 static int rrMaxFramebufferEdge(void) {
   static int cached = 0;
   if (!cached) {
-    int coarse = EM_ASM_INT({
-      return (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 1 : 0;
+    /* window.rrFbCap lets ?fb=N override the cap from the URL, so a suspected
+       fill-rate or GPU-memory limit can be bisected on a device without a
+       rebuild. 0 or absent means use the built-in caps. */
+    int override = EM_ASM_INT({
+      return (typeof window.rrFbCap === 'number' && window.rrFbCap > 0) ? window.rrFbCap : 0;
     });
-    cached = coarse ? RR_MAX_FB_LONG_EDGE_COARSE : RR_MAX_FB_LONG_EDGE;
+    if (override > 0) {
+      cached = override;
+    } else {
+      int coarse = EM_ASM_INT({
+        return (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 1 : 0;
+      });
+      cached = coarse ? RR_MAX_FB_LONG_EDGE_COARSE : RR_MAX_FB_LONG_EDGE;
+    }
   }
   return cached;
 }
