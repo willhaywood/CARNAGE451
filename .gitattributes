@@ -1,0 +1,4 @@
+# The vendored rRootage sources and barrage XML are 2003-era files with CRLF
+# endings. Preserve them byte-for-byte so the reference tree stays diffable
+# against upstream and the oracle build is reproducible.
+reference/** -text

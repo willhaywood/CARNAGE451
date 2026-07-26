@@ -1,0 +1,65 @@
+# Builds the Emscripten reference oracle and publishes it to GitHub Pages.
+#
+# The output is fully static (rr.html/js/wasm/data), single-threaded, and fetches
+# its payload with same-origin relative requests, so no COOP/COEP headers and no
+# server logic are needed -- Pages serves it as-is.
+#
+# Enable once under Settings -> Pages -> "Build and deployment" -> Source:
+# "GitHub Actions". Then this runs on every push to main that touches the build.
+name: Deploy reference build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'reference/**'
+      - '.github/workflows/deploy-reference.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight deploy at a time; don't cancel a running one mid-publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+
+      - name: Build
+        working-directory: reference/build
+        # bml/calc.cpp is checked in pre-generated, so bison is not required here.
+        run: make -f Makefile.emcc
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp reference/build/rr.html _site/index.html
+          cp reference/build/rr.js reference/build/rr.wasm reference/build/rr.data _site/
+          # Skip Jekyll: it would otherwise ignore files and mangle the payload.
+          touch _site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

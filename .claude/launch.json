@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rrootage-wasm-reference",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "/Users/whaywood/ProjectsWH/CARNAGE451/reference/serve.py",
+        "8321"
+      ],
+      "port": 8321
+    }
+  ]
+}

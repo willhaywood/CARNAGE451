@@ -1,0 +1,20 @@
+# Emscripten reference build outputs — CI rebuilds these from source
+# (see .github/workflows/deploy-reference.yml). Sources live in reference/rr.
+reference/build/*.o
+reference/build/obj/*.o
+reference/build/*.a
+reference/build/rr.html
+reference/build/rr.js
+reference/build/rr.wasm
+reference/build/rr.data
+
+# Node / Vite (for the TypeScript port)
+node_modules/
+dist/
+*.local
+
+# Editor & OS cruft
+.DS_Store
+.zhistory
+.idea/
+.vscode/

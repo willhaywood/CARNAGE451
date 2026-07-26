@@ -1,0 +1,79 @@
+# rRootage -> WebAssembly (Emscripten reference build)
+#
+# Replaces the original MinGW Makefile. Differences:
+#   - no windres / rr.rc / -mwindows / -lSDLmain / -lopengl32
+#   - libbulletml built from source (pspdev fork, float->double reverted)
+#   - SDL 1.2 + SDL_mixer 1.2 + legacy GL come from emscripten ports
+#   - game data preloaded into MEMFS so opendir/readdir still work
+
+NAME    = rr
+ASSETS ?= ../rr
+
+CC      = emcc
+CXX     = em++
+
+# LEGACY_GL_EMULATION provides glBegin/glEnd immediate mode and the GLU
+# entry points (gluPerspective/gluLookAt) that screen.c relies on.
+PORTS   = -sUSE_SDL=1 -sUSE_SDL_MIXER=1
+COMPAT  = -include emscripten_compat.h
+WARN    = -Wno-\#warnings -Wno-string-plus-int -Wno-deprecated-declarations
+
+CFLAGS   = -O2 $(PORTS) $(COMPAT) $(WARN)
+CXXFLAGS = -O2 -std=c++03 $(PORTS) $(COMPAT) $(WARN) -I./bulletml/ -I./bulletml/tinyxml/ -I./bml/
+
+# Barrage directories are opendir()'d by name at startup, so each must land
+# at the same relative path inside MEMFS.
+PRELOAD = \
+	--preload-file $(ASSETS)/normal@/normal \
+	--preload-file $(ASSETS)/reversible@/reversible \
+	--preload-file $(ASSETS)/morph@/morph \
+	--preload-file $(ASSETS)/simple@/simple \
+	--preload-file $(ASSETS)/morph_heavy@/morph_heavy \
+	--preload-file $(ASSETS)/psy@/psy \
+	--preload-file $(ASSETS)/sounds@/sounds \
+	--preload-file $(ASSETS)/images@/images
+
+LDFLAGS = $(PORTS) \
+	-sLEGACY_GL_EMULATION=1 \
+	-sGL_UNSAFE_OPTS=0 \
+	-sALLOW_MEMORY_GROWTH=1 \
+	-sEXIT_RUNTIME=0 \
+	-sASSERTIONS=1 \
+	-sSTACK_SIZE=1MB \
+	-lGL \
+	--use-preload-plugins \
+	$(PRELOAD)
+
+COBJS = rr.o ship.o laser.o frag.o background.o letterrender.o shot.o \
+	screen.o vector.o degutil.o rand.o mt19937int.o \
+	soundmanager.o attractmanager.o glu_compat.o
+
+CCOBJS = foe.o foecommand.o barragemanager.o boss.o
+
+BMLSRC = $(wildcard bml/*.cpp)
+BMLOBJ = $(patsubst bml/%.cpp,obj/%.o,$(BMLSRC))
+
+all: $(NAME).html
+
+$(NAME).html: $(COBJS) $(CCOBJS) libbulletml.a
+	$(CXX) -o $@ $(COBJS) $(CCOBJS) libbulletml.a $(LDFLAGS)
+
+libbulletml.a: $(BMLOBJ)
+	emar rcs $@ $(BMLOBJ)
+
+obj/%.o: bml/%.cpp | obj
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+obj:
+	mkdir -p obj
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+%.o: %.cc
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+clean:
+	rm -f *.o obj/*.o libbulletml.a $(NAME).html $(NAME).js $(NAME).wasm $(NAME).data
+
+.PHONY: all clean
