@@ -426,6 +426,8 @@
       'max vp    ' + maxVp,
       'wasm heap ' + heap,
       'draws/frm ' + drawCalls + '  peak ' + drawCallsPeak,
+      'audio     ' + audioPlays + ' play() calls' +
+        (audioFails.length ? '   rejected: ' + audioFails.join(',') : '   no rejections'),
     ].join('\n');
   };
 
@@ -437,19 +439,62 @@
       (errors.length ? '\n\n<span class="err">' + errors.slice(-6).join('\n') + '</span>' : '');
   };
 
-  const note = (s) => { errors.push(s); wantDiag = false; showDiag(); };
+  /* A non-fatal note must not blanket the playfield. Show the panel, then retire
+     it; tapping it dismisses immediately. ?diag=1 pins it open. */
+  let pinned = false, retire = 0;
+  const note = (s) => {
+    errors.push(s);
+    wantDiag = false;
+    showDiag();
+    if (!pinned) {
+      clearTimeout(retire);
+      retire = setTimeout(() => { if (!pinned) diagEl.hidden = true; }, 6000);
+    }
+  };
+
+  /* Only cover the screen for things that actually stop the game: a wasm abort,
+     or any failure before the runtime came up. Once it is running, report and
+     carry on -- an overlay over a playable game is worse than the fault it is
+     describing. */
+  const isFatal = (msg) => !runtimeReady || /Aborted\(|RuntimeError/.test(msg || '');
 
   window.addEventListener('error', (e) => {
-    // Report verbatim. e.error?.stack is the useful part when it is a wasm trap.
     const where = e.filename ? ' @' + e.filename.split('/').pop() + ':' + e.lineno : '';
-    note('ERROR ' + (e.message || '(no message)') + where);
+    const msg = e.message || '(no message)';
+    note('ERROR ' + msg + where);
     if (e.error && e.error.stack) note(String(e.error.stack).split('\n').slice(0, 4).join('\n'));
-    fail(e.message || 'Failed to start');
+    if (isFatal(msg)) fail(msg);
   });
+
   window.addEventListener('unhandledrejection', (e) => {
-    note('REJECTED ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason)));
-    fail('Failed to start');
+    const r = e.reason;
+    const name = (r && r.name) || '';
+    const msg  = (r && r.message) ? r.message : String(r);
+    note('REJECTED ' + (name ? name + ': ' : '') + msg);
+    // AbortError/NotAllowedError are what iOS throws for interrupted or
+    // not-yet-permitted media playback. They cost you sound, not the game.
+    if (/AbortError|NotAllowedError|NotSupportedError/.test(name)) return;
+    if (isFatal(msg)) fail(msg);
   });
+
+  /* Emscripten's SDL_mixer calls <audio>.play() without attaching a catch, so on
+     iOS every rejection surfaced as an unhandled promise. Swallow them here and
+     record the reason, so audio problems are visible without being fatal. */
+  let audioPlays = 0, audioFails = [];
+  (() => {
+    const ME = HTMLMediaElement.prototype, orig = ME.play;
+    if (!orig) return;
+    ME.play = function (...a) {
+      audioPlays++;
+      let p;
+      try { p = orig.apply(this, a); } catch (err) { audioFails.push(String(err && err.name)); return; }
+      if (p && p.catch) p.catch((err) => {
+        const n = (err && err.name) || 'Error';
+        if (audioFails.length < 8) audioFails.push(n);
+      });
+      return p;
+    };
+  })();
 
   // WebKit drops WebGL contexts aggressively under memory pressure. The stock
   // emscripten shell alerted on this; that was lost in the rewrite, so a lost
@@ -487,7 +532,8 @@
 
   const params = new URLSearchParams(location.search);
   if (params.has('fb')) window.rrFbCap = parseInt(params.get('fb'), 10) || 0;
-  if (params.has('diag')) wantDiag = true;   // revealed by the frame ticker
+  if (params.has('diag')) { wantDiag = true; pinned = true; }  // revealed by the frame ticker
+  diagEl.addEventListener('pointerdown', (e) => { diagEl.hidden = true; pinned = false; e.stopPropagation(); });
 
   const dismissGate = () => { gate.hidden = true; canvas.focus(); };
   gate.addEventListener('click', dismissGate);
