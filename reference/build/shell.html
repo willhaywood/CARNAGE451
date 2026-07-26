@@ -1,0 +1,582 @@
+<!doctype html>
+<!--
+  Custom emscripten shell for the rRootage reference build.
+
+  Replaces the stock template (emscripten logo, console textarea, unstyled
+  controls). Passed to emcc via --shell-file, so `make` regenerates rr.html from
+  this rather than overwriting hand edits.
+
+  {{{ SCRIPT }}} below is substituted by emcc with the loader tag; it must be
+  present or the link fails.
+
+  Layout contract with screen.c: the canvas is sized entirely by CSS here, and
+  syncCanvasToDisplay() reads that size back and matches the framebuffer to it
+  (x devicePixelRatio, capped). Do not set width/height attributes on the canvas.
+
+  Touch contract with touch.c: this file owns all touch handling and pushes the
+  resulting state through Module._rr_set_touch(). All tuning lives in TOUCH
+  below, so it can be adjusted and reloaded on a device without a wasm rebuild.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>rRootage</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%2305070c'/><circle cx='16' cy='16' r='6' fill='none' stroke='%2360f0ff' stroke-width='2'/><circle cx='16' cy='16' r='2' fill='%23ffcc44'/></svg>">
+<style>
+  :root {
+    --bg:      #05070c;
+    --fg:      #c8d4e4;
+    --dim:     #5a6a80;
+    --accent:  #60f0ff;
+    --warn:    #ffcc44;
+    --danger:  #ff5566;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  #stage { position: fixed; inset: 0; display: grid; place-items: center; }
+
+  /* 4:3 to match the game's own letterboxing, so GL never has to draw bars.
+     dvh matters on mobile: 100vh includes the retractable address bar, so the
+     frame would otherwise be taller than the visible viewport. */
+  #frame {
+    position: relative;
+    aspect-ratio: 4 / 3;
+    width:  min(100vw, calc(100vh * 4 / 3));
+    height: min(100vh, calc(100vw * 3 / 4));
+    width:  min(100vw, calc(100dvh * 4 / 3));
+    height: min(100dvh, calc(100vw * 3 / 4));
+    max-width: 1600px;
+    max-height: 1200px;
+  }
+
+  /* Fullscreen: the frame covers the screen, and the canvas keeps 4:3 centred
+     inside it. Sizing the *frame* to 100vw/100vh instead would override
+     aspect-ratio and hand the canvas a non-4:3 box — the game's own viewport
+     letterboxing would hide that, but only by drawing a second set of bars. */
+  #frame:fullscreen,
+  #frame:-webkit-full-screen {
+    max-width: none; max-height: none;
+    width: 100vw; height: 100vh;
+    display: grid; place-items: center;
+    background: var(--bg);
+  }
+  #frame:fullscreen > canvas,
+  #frame:-webkit-full-screen > canvas {
+    width:  min(100vw, calc(100vh * 4 / 3));
+    height: min(100vh, calc(100vw * 3 / 4));
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    border: 0;
+    outline: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: none;
+  }
+
+  /* ---- loading ---- */
+
+  #loader {
+    position: absolute; inset: 0;
+    display: grid; place-content: center; justify-items: center;
+    gap: 1.25rem;
+    background: var(--bg);
+    transition: opacity .35s ease;
+    z-index: 5;
+  }
+  #loader.done { opacity: 0; pointer-events: none; }
+
+  /* Deliberately not uppercased: the game's own logo is "rRootage" with the
+     leading lowercase r, and text-transform turns it into "RROOTAGE". */
+  #wordmark {
+    font-size: clamp(1.7rem, 5vw, 2.8rem);
+    font-weight: 600;
+    letter-spacing: .04em;
+    color: var(--fg);
+    text-shadow: 0 0 18px rgba(96, 240, 255, .35);
+  }
+  #wordmark span { color: var(--accent); }
+
+  #bar { width: min(280px, 60vw); height: 2px; background: rgba(200,212,228,.14); overflow: hidden; }
+  #bar > i {
+    display: block; height: 100%; width: 0%;
+    background: var(--accent); box-shadow: 0 0 10px var(--accent);
+    transition: width .2s ease;
+  }
+  #bar.indeterminate > i { width: 35%; animation: sweep 1.1s ease-in-out infinite; }
+  @keyframes sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(285%); } }
+
+  #status {
+    font-size: .75rem; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--dim); min-height: 1em;
+  }
+  #status.error { color: var(--danger); text-transform: none; letter-spacing: .04em; }
+
+  /* ---- desktop chrome ---- */
+
+  #hud {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1rem; padding: .6rem .8rem;
+    font-size: .7rem; color: var(--dim);
+    opacity: 0; transition: opacity .3s ease;
+    pointer-events: none; z-index: 3;
+  }
+  #stage:hover #hud, #hud:focus-within { opacity: 1; }
+  #hud kbd {
+    display: inline-block; padding: .1em .4em; margin: 0 .1em;
+    border: 1px solid rgba(200,212,228,.25); border-radius: 3px;
+    color: var(--fg); font: inherit; font-size: .95em;
+  }
+  #keys { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  #fs, #ptr {
+    pointer-events: auto; flex: none;
+    padding: .35em .8em; background: transparent;
+    border: 1px solid rgba(200,212,228,.25); border-radius: 3px;
+    color: var(--fg); font: inherit; letter-spacing: .1em; text-transform: uppercase;
+    cursor: pointer;
+  }
+  #fs:hover, #ptr:hover { border-color: var(--accent); color: var(--accent); }
+  #fs:focus-visible, #ptr:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #fs[hidden] { display: none; }
+  #ptr.on { border-color: var(--accent); color: var(--accent); background: rgba(96,240,255,.12); }
+
+  /* ---- audio / focus gate ---- */
+
+  #gate {
+    position: absolute; inset: 0;
+    display: grid; place-content: center; gap: .8rem; justify-items: center;
+    background: rgba(5,7,12,.82);
+    -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+    cursor: pointer; z-index: 4;
+    touch-action: none;
+  }
+  #gate[hidden] { display: none; }
+  #gate b {
+    font-size: .8rem; font-weight: 600; letter-spacing: .2em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  #gate small { color: var(--dim); font-size: .7rem; letter-spacing: .08em; }
+
+  /* ---- touch controls ---- */
+
+  /* Hidden until a touch is actually seen (or the pointer is known-coarse), so
+     desktop is never cluttered and hybrid laptops only get them if used.
+     Lives inside #stage — which is already full-viewport — rather than being
+     position:fixed itself. A fixed element creates its own stacking context, so
+     it would paint above the whole #stage subtree no matter how high the
+     loader's and gate's z-indexes were, and swallow their clicks. */
+  #touch { position: absolute; inset: 0; z-index: 2; display: none; touch-action: none; }
+  body.touch #touch { display: block; }
+  /* Real touch devices lose the keyboard legend, but the desktop pointer-test
+     mode keeps it so the toggle stays reachable. */
+  body.touch:not(.ptrtest) #hud { display: none; }
+
+  /* The entire screen is the drag surface -- no joystick, no fixed zone.
+     Touch anywhere and the ship moves relative to where the thumb landed,
+     which is why nothing needs to be drawn for it. */
+  #dragsurface { position: absolute; inset: 0; touch-action: none; }
+
+  .tbtn {
+    position: absolute;
+    display: grid; place-items: center;
+    border: 1px solid rgba(200,212,228,.30);
+    border-radius: 50%;
+    background: rgba(200,212,228,.06);
+    color: var(--fg);
+    font: inherit; font-size: .62rem;
+    letter-spacing: .12em; text-transform: uppercase;
+    opacity: .45;
+    touch-action: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tbtn.on {
+    opacity: 1;
+    border-color: var(--accent);
+    background: rgba(96,240,255,.20);
+    color: var(--accent);
+  }
+
+  /* The only visible control. Sits in the dead space right of the playfield so
+     it never covers the action. */
+  #bBomb {
+    width: 78px; height: 78px;
+    right: calc(5% + env(safe-area-inset-right, 0px));
+    bottom: calc(10% + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* ---- rotate prompt ---- */
+
+  #rotate {
+    position: fixed; inset: 0; z-index: 6;
+    display: none; place-content: center; justify-items: center; gap: 1rem;
+    background: var(--bg); text-align: center; padding: 2rem;
+  }
+  /* Only nag on touch devices in portrait — a narrow desktop window is fine. */
+  @media (orientation: portrait) and (pointer: coarse) {
+    body.touch #rotate { display: grid; }
+  }
+  #rotate svg { width: 56px; height: 56px; stroke: var(--accent); fill: none; stroke-width: 1.5; }
+  #rotate b {
+    font-size: .8rem; font-weight: 600; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--fg);
+  }
+  #rotate small { color: var(--dim); font-size: .7rem; letter-spacing: .06em; max-width: 22rem; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #loader, #bar > i, #hud, #stick, .tbtn { transition: none; }
+    #bar.indeterminate > i { animation: none; width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="frame">
+    <canvas id="canvas" tabindex="0" aria-label="rRootage game screen"></canvas>
+
+    <div id="loader">
+      <div id="wordmark">r<span>Rootage</span></div>
+      <div id="bar" class="indeterminate"><i></i></div>
+      <div id="status" role="status" aria-live="polite">Loading</div>
+    </div>
+
+    <div id="gate" hidden>
+      <b>Tap to play</b>
+      <small>enables sound</small>
+    </div>
+
+    <div id="hud">
+      <div id="keys">
+        <kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> move
+        &nbsp; <kbd>Z</kbd> shoot &nbsp; <kbd>X</kbd> bomb &nbsp; <kbd>P</kbd> pause
+      </div>
+      <button id="ptr" type="button" title="Drive the touch controls with the mouse">Touch test</button>
+      <button id="fs" type="button">Fullscreen</button>
+    </div>
+  </div>
+
+  <div id="touch" aria-hidden="true">
+    <div id="dragsurface"></div>
+    <div class="tbtn" id="bBomb">Bomb</div>
+  </div>
+</div>
+
+<div id="rotate">
+  <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M8 3.5 10.5 6 8 8.5"/></svg>
+  <b>Rotate your device</b>
+  <small>rRootage plays in landscape — the field is tall and narrow, and the side panels are where your thumbs go.</small>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const frame  = document.getElementById('frame');
+  const loader = document.getElementById('loader');
+  const bar    = document.getElementById('bar');
+  const fill   = bar.querySelector('i');
+  const status = document.getElementById('status');
+  const gate   = document.getElementById('gate');
+
+  let failed = false;
+
+  const setStatus = (text) => {
+    if (failed) return;
+    const m = /\((\d+(?:\.\d+)?)\/(\d+)\)/.exec(text || '');
+    if (m) {
+      bar.classList.remove('indeterminate');
+      fill.style.width = Math.min(100, (+m[1] / +m[2]) * 100) + '%';
+    }
+    if (!text) return;
+    status.textContent = text.replace(/\s*\([^)]*\)\s*$/, '').replace(/\.\.\.$/, '');
+  };
+
+  const hideLoader = () => {
+    fill.style.width = '100%';
+    bar.classList.remove('indeterminate');
+    loader.classList.add('done');
+    setTimeout(() => { loader.hidden = true; }, 400);
+  };
+
+  const fail = (msg) => {
+    failed = true;
+    loader.hidden = false;
+    loader.classList.remove('done');
+    bar.style.display = 'none';
+    status.className = 'error';
+    status.textContent = msg;
+  };
+
+  window.Module = {
+    canvas,
+    setStatus,
+    print:    (...a) => console.log(...a),
+    printErr: (...a) => console.error(...a),
+    totalDependencies: 0,
+    monitorRunDependencies(left) {
+      this.totalDependencies = Math.max(this.totalDependencies, left);
+      if (left) {
+        setStatus('Preparing (' + (this.totalDependencies - left) + '/' + this.totalDependencies + ')');
+      } else {
+        setStatus('');
+        hideLoader();
+        gate.hidden = false;
+      }
+    }
+  };
+
+  setStatus('Downloading');
+
+  window.addEventListener('error', () => fail('Failed to start — see the browser console.'));
+  window.addEventListener('unhandledrejection', () => fail('Failed to start — see the browser console.'));
+
+  const dismissGate = () => { gate.hidden = true; canvas.focus(); };
+  gate.addEventListener('click', dismissGate);
+  gate.addEventListener('keydown', dismissGate);
+  window.addEventListener('keydown', () => { if (!gate.hidden) dismissGate(); }, { once: true });
+
+  // Fullscreen is unavailable for arbitrary elements on iPhone Safari, so hide
+  // the control rather than leaving one that silently does nothing.
+  const fsBtn = document.getElementById('fs');
+  if (!document.fullscreenEnabled && !document.webkitFullscreenEnabled) {
+    fsBtn.hidden = true;
+  }
+  fsBtn.addEventListener('click', () => {
+    // Fullscreen the frame, not the canvas: the canvas is CSS-sized to 100% of
+    // it, so the aspect ratio survives and screen.c re-syncs on the change event.
+    // Emscripten's own Module.requestFullscreen is bypassed deliberately — it
+    // rewrites canvas.width/height and fights syncCanvasToDisplay().
+    if (document.fullscreenElement) document.exitFullscreen();
+    else frame.requestFullscreen?.().catch(() => {});
+    canvas.focus();
+  });
+
+  canvas.addEventListener('mousedown', () => canvas.focus());
+  window.addEventListener('keydown', (e) => {
+    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  }, { passive: false });
+
+  /* ------------------------------------------------------------------ *
+   * Touch input
+   *
+   * No joystick and no fixed zone: the whole screen is the surface. The ship
+   * moves in the direction of the finger's offset from wherever it first
+   * landed, so the thumb is never required to sit on the ship (fatal in a
+   * bullet hell -- the thing you must see would be underneath it).
+   *
+   * Drag distance sets SPEED, not just direction. The vector's magnitude is
+   * pushed through as 128..256 in 8.8, and ship.c multiplies it by ship.speed,
+   * giving roughly the same 500..1000 range the fire button used to toggle
+   * between. That is what replaces the focus-slow, which autofire would
+   * otherwise hold on permanently.
+   *
+   * Fire is automatic while a finger is down. touch.c gates it on IN_GAME so
+   * that touching to navigate a menu doesn't instantly select an entry; menus
+   * get the short `tap` pulse instead.
+   * ------------------------------------------------------------------ */
+
+  /* Positional steering. The ship follows the thumb's accumulated travel and
+     stops when the thumb stops, which is what allows tight moves between
+     bullets. The previous velocity model (hold an offset, keep moving) always
+     overshot, because stopping meant returning the finger to an invisible
+     origin. */
+  const TOUCH = {
+    gain:     1.0,  // 1.0 = the ship travels exactly as far as the thumb does
+    tapMs:    250,  // press shorter than this, and...
+    tapPx:    12,   // ...moved less than this, counts as a tap
+    tapHold:  140,  // ms to hold a synthesized press, so the 62Hz sim sees it
+    dirPx:    10,   // offset before a menu direction is reported
+  };
+
+  // The playfield is the centre half of the 4:3 canvas and 320x480 field units
+  // across, stored in 8.8. Both axes work out to the same scale, so one factor
+  // converts CSS pixels to field units: (320<<8) / (cssWidth/2) = 163840/cssWidth.
+  const FIELD_SCALE_NUM = 163840;
+  const fieldPerPx = () => {
+    const w = canvas.getBoundingClientRect().width;
+    return w > 0 ? FIELD_SCALE_NUM / w : 0;
+  };
+
+  const surface = document.getElementById('dragsurface');
+  const drag = { id: null, lx: 0, ly: 0, accX: 0, accY: 0,
+                 dx: 0, dy: 0, t0: 0, moved: 0 };
+  const btn = { bomb: false };
+  const down = new Set();
+  let tapUntil = 0, pauseUntil = 0;
+
+  const push = () => {
+    const fn = window.Module && window.Module._rr_set_touch;
+    if (!fn) return;
+    const now = Date.now();
+    let dirX = 0, dirY = 0;
+    if (drag.id !== null) {
+      // Direction of the current offset, for menu navigation only.
+      const m = Math.hypot(drag.dx, drag.dy);
+      if (m > TOUCH.dirPx) {
+        dirX = Math.round(drag.dx / m * 256);
+        dirY = Math.round(drag.dy / m * 256);
+      }
+    }
+    fn(Math.round(drag.accX), Math.round(drag.accY), dirX, dirY,
+       drag.id !== null ? 1 : 0,
+       now < tapUntil   ? 1 : 0,
+       btn.bomb         ? 1 : 0,
+       now < pauseUntil ? 1 : 0);
+  };
+
+  // Held rather than instantaneous: rr.c toggles pause on the press edge and
+  // polls once per 16ms sim step, so a zero-length pulse could fall between two
+  // steps and be missed entirely.
+  const pulsePause = () => {
+    if (Date.now() < pauseUntil) return;
+    pauseUntil = Date.now() + TOUCH.tapHold;
+    push();
+    setTimeout(push, TOUCH.tapHold + 20);
+  };
+
+  const enableTouchUI = () => {
+    if (!document.body.classList.contains('touch')) document.body.classList.add('touch');
+  };
+  if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) enableTouchUI();
+
+  surface.addEventListener('pointerdown', (e) => {
+    // Right button is the mouse stand-in for the two-finger pause tap.
+    if (e.pointerType === 'mouse' && e.button === 2) { pulsePause(); e.preventDefault(); return; }
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    enableTouchUI();
+    down.add(e.pointerId);
+    // Two-finger tap = pause. Fires on the second finger landing rather than on
+    // release, so it responds immediately; the bomb button stops propagation so
+    // reaching for it never counts as the second finger.
+    if (down.size === 2) pulsePause();
+
+    if (drag.id !== null) { e.preventDefault(); return; }
+    drag.id = e.pointerId;
+    drag.lx = e.clientX; drag.ly = e.clientY;
+    drag.accX = drag.accY = 0;
+    drag.dx = drag.dy = 0;
+    drag.t0 = Date.now();
+    drag.moved = 0;
+    try { surface.setPointerCapture(e.pointerId); } catch (_) {}
+    push();
+    e.preventDefault();
+  });
+
+  surface.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== drag.id) return;
+    const k = fieldPerPx() * TOUCH.gain;
+    // Integrate movement rather than measuring offset from a fixed origin, so
+    // there is no origin to return to and no drift when the finger is lifted.
+    drag.accX += (e.clientX - drag.lx) * k;
+    drag.accY += (e.clientY - drag.ly) * k;
+    drag.dx += e.clientX - drag.lx;
+    drag.dy += e.clientY - drag.ly;
+    drag.lx = e.clientX; drag.ly = e.clientY;
+    drag.moved = Math.max(drag.moved, Math.hypot(drag.dx, drag.dy));
+    push();
+    e.preventDefault();
+  });
+
+  const endDrag = (e) => {
+    down.delete(e.pointerId);
+    if (e.pointerId !== drag.id) return;
+    // A short, still press is a tap: pulse BUTTON1 so menus can be operated.
+    // In play this is redundant (autofire already holds BUTTON1) and harmless.
+    if (Date.now() - drag.t0 < TOUCH.tapMs && drag.moved < TOUCH.tapPx) {
+      tapUntil = Date.now() + TOUCH.tapHold;
+      setTimeout(push, TOUCH.tapHold + 20);
+    }
+    drag.id = null;
+    push();
+  };
+  surface.addEventListener('pointerup', endDrag);
+  surface.addEventListener('pointercancel', endDrag);
+  // Right-click is the pause gesture, so suppress the menu it would open.
+  surface.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  const bombEl = document.getElementById('bBomb');
+  const bombDown = (e) => {
+    enableTouchUI();
+    btn.bomb = true;
+    bombEl.classList.add('on');
+    try { bombEl.setPointerCapture(e.pointerId); } catch (_) {}
+    push();
+    e.preventDefault();
+    e.stopPropagation();               // must not also start a drag or count as finger 2
+  };
+  const bombUp = (e) => {
+    btn.bomb = false;
+    bombEl.classList.remove('on');
+    push();
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  bombEl.addEventListener('pointerdown', bombDown);
+  bombEl.addEventListener('pointerup', bombUp);
+  bombEl.addEventListener('pointercancel', bombUp);
+
+  window.addEventListener('touchstart', enableTouchUI, { once: true, passive: true });
+
+  /* Desktop pointer-test mode: drive the touch controls with the mouse, so the
+     scheme can be exercised without a phone. Pointer Events already deliver
+     mouse input to the handlers above; this only reveals the UI and swaps the
+     legend. Enable with the toolbar button or ?touch=1. */
+  const ptrBtn = document.getElementById('ptr');
+  const keysEl = document.getElementById('keys');
+  const keysHtml = keysEl.innerHTML;
+  const setPtrTest = (on) => {
+    document.body.classList.toggle('ptrtest', on);
+    document.body.classList.toggle('touch', on || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches));
+    ptrBtn.classList.toggle('on', on);
+    keysEl.innerHTML = on
+      ? 'drag anywhere to move &nbsp;·&nbsp; autofire &nbsp;·&nbsp; <kbd>right-click</kbd> pause (two-finger tap on a phone)'
+      : keysHtml;
+    if (!on) releaseAll();
+  };
+  ptrBtn.addEventListener('click', () => setPtrTest(!document.body.classList.contains('ptrtest')));
+  if (new URLSearchParams(location.search).has('touch')) setPtrTest(true);
+
+  // Safety: if the page loses focus mid-hold, C would keep seeing input
+  // forever -- and with autofire that also means a permanently held trigger.
+  const releaseAll = () => {
+    drag.id = null;
+    drag.accX = drag.accY = drag.dx = drag.dy = 0;
+    btn.bomb = false;
+    down.clear();
+    tapUntil = pauseUntil = 0;
+    bombEl.classList.remove('on');
+    push();
+  };
+  window.addEventListener('blur', releaseAll);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+})();
+</script>
+
+{{{ SCRIPT }}}
+</body>
+</html>

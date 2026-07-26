@@ -39,6 +39,7 @@ PRELOAD = \
 SHELL_HTML = shell.html
 
 LDFLAGS = $(PORTS) \
+	--shell-file $(SHELL_HTML) \
 	-sLEGACY_GL_EMULATION=1 \
 	-sGL_UNSAFE_OPTS=0 \
 	-sALLOW_MEMORY_GROWTH=1 \
@@ -60,7 +61,7 @@ BMLOBJ = $(patsubst bml/%.cpp,obj/%.o,$(BMLSRC))
 
 all: $(NAME).html
 
-$(NAME).html: $(COBJS) $(CCOBJS) libbulletml.a
+$(NAME).html: $(COBJS) $(CCOBJS) libbulletml.a $(SHELL_HTML)
 	$(CXX) -o $@ $(COBJS) $(CCOBJS) libbulletml.a $(LDFLAGS)
 
 libbulletml.a: $(BMLOBJ)
