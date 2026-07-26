@@ -52,7 +52,7 @@ LDFLAGS = $(PORTS) \
 
 COBJS = rr.o ship.o laser.o frag.o background.o letterrender.o shot.o \
 	screen.o vector.o degutil.o rand.o mt19937int.o \
-	soundmanager.o attractmanager.o glu_compat.o
+	soundmanager.o attractmanager.o glu_compat.o touch.o
 
 CCOBJS = foe.o foecommand.o barragemanager.o boss.o
 

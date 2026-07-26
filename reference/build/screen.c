@@ -24,6 +24,7 @@
 #include "attractmanager.h"
 #include "letterrender.h"
 #include "boss_mtd.h"
+#include "touch.h"
 #include <emscripten.h>
 
 #ifdef __EMSCRIPTEN__
@@ -1181,6 +1182,12 @@ int getPadState() {
   int x = 0, y = 0;
   int hat = SDL_HAT_CENTERED;
   int pad = 0;
+#ifdef __EMSCRIPTEN__
+  /* Additive: zero unless a finger is steering, so keyboard and joystick are
+     unaffected. moveShip() prefers the analog vector and ignores these bits;
+     they exist for the menu screens, which are written against the d-pad. */
+  pad |= rrTouchPad();
+#endif
   if ( stick != NULL ) {
     x = SDL_JoystickGetAxis(stick, 0);
     y = SDL_JoystickGetAxis(stick, 1);
@@ -1237,5 +1244,8 @@ int getButtonState() {
   if (keys [SDLK_p] == SDL_PRESSED || btn5 || btn6 || btn7 || btn8 || btn9) {
     btn |= PAD_BUTTONP;
   }
+#ifdef __EMSCRIPTEN__
+  btn |= rrTouchButtons();
+#endif
   return btn;
 }

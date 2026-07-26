@@ -18,6 +18,8 @@
 #include "screen.h"
 #include "vector.h"
 #include "ship.h"
+#include "touch.h"
+#include <math.h>
 #include "degutil.h"
 #include "laser.h"
 #include "shot.h"
@@ -154,6 +156,13 @@ void moveShip() {
     }
     switch ( mode ) {
     case NORMAL_MODE:
+#ifdef __EMSCRIPTEN__
+      /* Under touch autofire BUTTON1 is held permanently, so this focus-slow
+         would pin the ship at SHIP_SLOW_SPEED for the whole run. Speed is
+         chosen by drag distance instead (see rrTouchMoveVector), which covers
+         the same 500..1000 range the fire button used to toggle between. */
+      if ( rrTouchAutofire() ) break;
+#endif
       if ( ship.speed > SHIP_SLOW_SPEED ) {
 	ship.speed -= SHIP_SLOW_DOWN;
       }
@@ -314,18 +323,47 @@ void moveShip() {
     ship.d += 3.2;
     break;
   }
-  if ( sd >= 0 ) {
-    ship.pos.x += (ship.speed*shipMv[sd][0])>>8;
-    ship.pos.y += (ship.speed*shipMv[sd][1])>>8;
-    if ( ship.pos.x < -FIELD_WIDTH_8/2+SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH ) {
-      ship.pos.x = -FIELD_WIDTH_8/2+SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH;
-    } else if ( ship.pos.x > FIELD_WIDTH_8/2-SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH ) {
-      ship.pos.x = FIELD_WIDTH_8/2-SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH;
+  {
+    int moving = 0;
+#ifdef __EMSCRIPTEN__
+    int tx, ty;
+    if ( rrTouchTarget(&tx, &ty) ) {
+      /* Positional steering: close the gap to the finger's target, but never
+         move further in one frame than ship.speed would allow. When the thumb
+         stops, the gap is zero and so is the movement -- that is what makes
+         tight repositioning possible, and it is the part a velocity model
+         cannot do. The clamp keeps the original speed ceiling, so a fast flick
+         is followed at the ship's own maximum rather than teleporting. */
+      double dx = (double)(tx - ship.pos.x);
+      double dy = (double)(ty - ship.pos.y);
+      double m  = sqrt(dx*dx + dy*dy);
+      if ( m > (double)ship.speed ) {
+        dx = dx * (double)ship.speed / m;
+        dy = dy * (double)ship.speed / m;
+      }
+      ship.pos.x += (int)dx;
+      ship.pos.y += (int)dy;
+      moving = 1;
+    } else
+#endif
+    /* shipMv[] is a normalized unit vector in 8.8 fixed point (256 = 1.0),
+       scaled by ship.speed. Untouched keyboard/joystick path. */
+    if ( sd >= 0 ) {
+      ship.pos.x += (ship.speed*shipMv[sd][0])>>8;
+      ship.pos.y += (ship.speed*shipMv[sd][1])>>8;
+      moving = 1;
     }
-    if ( ship.pos.y < -FIELD_HEIGHT_8/2+SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH ) {
-      ship.pos.y = -FIELD_HEIGHT_8/2+SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH;
-    } else if ( ship.pos.y > FIELD_HEIGHT_8/2-SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH ) {
-      ship.pos.y = FIELD_HEIGHT_8/2-SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH;
+    if ( moving ) {
+      if ( ship.pos.x < -FIELD_WIDTH_8/2+SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH ) {
+        ship.pos.x = -FIELD_WIDTH_8/2+SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH;
+      } else if ( ship.pos.x > FIELD_WIDTH_8/2-SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH ) {
+        ship.pos.x = FIELD_WIDTH_8/2-SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH;
+      }
+      if ( ship.pos.y < -FIELD_HEIGHT_8/2+SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH ) {
+        ship.pos.y = -FIELD_HEIGHT_8/2+SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH;
+      } else if ( ship.pos.y > FIELD_HEIGHT_8/2-SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH ) {
+        ship.pos.y = FIELD_HEIGHT_8/2-SHIP_FIELD_WIDTH*SHIP_SCREEN_EDGE_WIDTH;
+      }
     }
   }
 
