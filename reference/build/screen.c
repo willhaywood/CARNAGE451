@@ -163,19 +163,12 @@ static float rrHudBottom = 480.0f; /* HUD y at the bottom of the screen */
 static float rrFieldTop  = 0.0f;   /* HUD y of the field's top edge */
 static float rrFieldBot  = 480.0f; /* ...and its bottom edge */
 
-/* HUD units kept clear above the field. The score occupies y 14..52 at size 28;
-   the rest is inset so it is not flush against the bezel or a notch. The
-   remaining slack all goes below the field, for LEFT/BOMB and the thumb. */
-#define RR_TOP_STRIP    82
+/* HUD units reserved above the field, enough for the score, the boss shield bar
+   and the readout drawRPanel() lays out there in portrait. Reserving it costs no
+   playfield on a phone: the field is limited by the width, so the leftover height
+   would otherwise just sit unused below. */
+#define RR_TOP_STRIP   150
 #define RR_SCORE_INSET  16
-
-/* Bounding box of what drawRPanel() actually draws, which is not obvious from its
-   arguments: the STAGE/scene block starts at (604, 24) and LEFT/BOMB at (520,
-   280), all drawn downward, reaching about y 440. Used to fit it to the strip. */
-#define RR_PANEL_X    520
-#define RR_PANEL_Y     24
-#define RR_PANEL_H    420
-#define RR_PANEL_PAD   10
 
 // Reset viewport when the screen is resized.
 static void screenResized() {
@@ -194,19 +187,19 @@ static void screenResized() {
   } else {
     /* Taller than 4:3: the field gets its own 2:3 viewport across the full
        width. HUD x stays 0..640 mapped to the screen width so nothing that
-       draws into it gets clipped; y just extends past 480. */
-    int topPx;
+       draws into it gets clipped; y just extends past 480.
+
+       The top strip is reserved first and the field fitted into what is left, so
+       the readout never ends up overlapping the playfield on a squarer screen. */
+    int topPx, availH;
     rrPortrait  = 1;
     rrHudScale  = (float)screenWidth / (float)SCREEN_WIDTH;
     topPx       = (int)(RR_TOP_STRIP * rrHudScale);
+    availH      = screenHeight - topPx;
+    if (availH < 1) { topPx = 0; availH = screenHeight; }
     vpW = screenWidth;
     vpH = vpW * 3 / 2;
-    if (topPx + vpH > screenHeight) {
-      /* Not enough height for a full-width field plus the score strip. */
-      vpH = screenHeight - topPx;
-      if (vpH < 1) { vpH = screenHeight; topPx = 0; }
-      vpW = vpH * 2 / 3;
-    }
+    if (vpH > availH) { vpH = availH; vpW = vpH * 2 / 3; }
     vpX = (screenWidth - vpW) / 2;
     vpY = screenHeight - topPx - vpH;      /* GL y counts from the bottom */
     rrHudBottom = (float)screenHeight / rrHudScale;
@@ -235,6 +228,9 @@ static void screenResized() {
 EMSCRIPTEN_KEEPALIVE
 int rr_field_px_width(void) { return rrPortrait ? vpW : vpW / 2; }
 #endif
+
+/* The HUD is laid out differently in portrait, and drawRPanel() needs to know. */
+int rrHudPortrait(void) { return rrPortrait; }
 
 void resized(int width, int height) {
   screenWidth = width; screenHeight = height;
@@ -1152,29 +1148,14 @@ void drawSideBoards() {
     /* No masking needed: the field exactly fills its own viewport, and glClear
        has already blacked out everything outside it.
 
-       Both HUD panels are re-placed rather than redrawn. The score is inset from
-       the top-left corner so it clears a notch. The right panel is a single tall
-       column -- everything in it is drawn downward with drawString's d=1 -- so it
-       is mapped as a block into the strip below the field. It is taller than the
-       strip, hence the scale; a plain translation would push it back over the
-       playfield. */
-    float s, tx, ty;
+       The score is inset from the top-left corner so it clears a notch.
+       drawRPanel() checks the orientation and lays itself out across the top
+       strip, so it needs no transform here. */
     glPushMatrix();
     glTranslatef(RR_SCORE_INSET, RR_SCORE_INSET, 0);
     drawScore();
     glPopMatrix();
-
-    s = (rrHudBottom - rrFieldBot - 2.0f * RR_PANEL_PAD) / (float)RR_PANEL_H;
-    if ( s > 1.0f ) s = 1.0f;
-    /* glTranslate then glScale maps p -> s*p + t, so solve t for the corner of
-       the panel's own bounding box landing at the top-left of the strip. */
-    tx = RR_SCORE_INSET      - s * (float)RR_PANEL_X;
-    ty = rrFieldBot + RR_PANEL_PAD - s * (float)RR_PANEL_Y;
-    glPushMatrix();
-    glTranslatef(tx, ty, 0);
-    glScalef(s, s, 1.0f);
     drawRPanel();
-    glPopMatrix();
     return;
   }
   glDisable(GL_BLEND);

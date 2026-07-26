@@ -208,9 +208,61 @@ void drawScore() {
 
 static char *lStr = "LEFT", *bStr = "BOMB", *okStr="OK";
 
+/*
+ * Portrait lays the readout across the strip above the field instead.
+ *
+ * The landscape panel is a tall narrow column -- every string in it is drawn
+ * downward with drawString's d=1 -- because it lives in the right-hand board.
+ * Portrait has no side boards, and the only free space is wide and short, so the
+ * same information is laid out again horizontally rather than scaled to fit,
+ * which just made it unreadable. Right-aligned, into the corner the score and the
+ * boss shield bar leave free.
+ */
+#define RRP_ROW_STAGE   76   /* stage label and scene number */
+#define RRP_ROW_COUNT  112   /* LEFT/BOMB row */
+#define RRP_LBL_SIZE    20
+#define RRP_VAL_SIZE    28
+#define RRP_STG_SIZE    20
+
+static void drawRPanelPortrait() {
+  int ml;
+  if ( left >= 0 ) {
+    drawString(lStr, 252, RRP_ROW_COUNT, RRP_LBL_SIZE, 0, 200, 200, 222);
+    drawLetter(left, 400, RRP_ROW_COUNT, RRP_VAL_SIZE, 0, 230, 180, 150);
+    switch ( mode ) {
+    case NORMAL_MODE:
+      drawString(bStr, 442, RRP_ROW_COUNT, RRP_LBL_SIZE, 0, 200, 200, 222);
+      drawLetter(bomb, 590, RRP_ROW_COUNT, RRP_VAL_SIZE, 0, 230, 180, 150);
+      break;
+    case PSY_MODE:
+      ml = ship.grzCnt/40;
+      drawBox(554, RRP_ROW_COUNT, 50, 8, 120, 120, 120);
+      drawBox(504+ml, RRP_ROW_COUNT, ml, 8, 210, 210, 240);
+      break;
+    case GW_MODE:
+      ml = (ship.rfMtr-ship.rfMtrDec)/40;
+      drawBox(554, RRP_ROW_COUNT, 50, 8, 120, 120, 120);
+      drawBox(504+ml, RRP_ROW_COUNT, ml, 8, 210, 240, 210);
+      if ( ml >= 50 ) {
+	drawString(okStr, 539, RRP_ROW_COUNT, 12, 0, 230, 240, 230);
+      }
+      break;
+    }
+  }
+  /* stageStr is the short stage label ("1A"), not the word. drawNumCenter draws
+     horizontally and right-aligned on x, despite the name. */
+  drawString(stageStr, 484, RRP_ROW_STAGE, RRP_STG_SIZE, 0, 200, 200, 222);
+  drawLetter(38, 550, RRP_ROW_STAGE, RRP_STG_SIZE, 0, 200, 200, 222);
+  drawNumCenter(scene+1, 594, RRP_ROW_STAGE, RRP_STG_SIZE, 200, 200, 222);
+}
+
 void drawRPanel() {
   int y;
   int ml;
+  if ( rrHudPortrait() ) {
+    drawRPanelPortrait();
+    return;
+  }
   if ( left >= 0 ) {
     drawString(lStr, 40+480, 280, 18, 1, 200, 200, 222);
     drawLetter(left, 40+480, 420, 18, 1, 230, 180, 150);
