@@ -33,6 +33,11 @@ PRELOAD = \
 	--preload-file $(ASSETS)/sounds@/sounds \
 	--preload-file $(ASSETS)/images@/images
 
+# Custom page shell: drops the emscripten logo/banner and the console textarea,
+# and styles the loading state. Without this, emcc emits its stock template and
+# would overwrite any hand edits to rr.html on every build.
+SHELL_HTML = shell.html
+
 LDFLAGS = $(PORTS) \
 	-sLEGACY_GL_EMULATION=1 \
 	-sGL_UNSAFE_OPTS=0 \

@@ -24,6 +24,7 @@
 #include "attractmanager.h"
 #include "letterrender.h"
 #include "boss_mtd.h"
+#include <emscripten.h>
 
 #ifdef __EMSCRIPTEN__
 /*
@@ -165,91 +166,111 @@ void resized(int width, int height) {
 
 #ifdef __EMSCRIPTEN__
 /*
- * Render at the display's real pixel density instead of a fixed 640x480.
+ * Match the framebuffer to the canvas's on-screen size at device resolution.
  *
- * SDL_SetVideoMode gives the canvas a 640x480 backing store, which the browser
- * then scales to whatever size the element occupies. On a 2x display that is
- * already a doubling when windowed, and going fullscreen stretches 640x480
- * across the whole screen -- hence the blur. Nothing here is a low-resolution
- * asset: the only bitmaps are two 128x128 glow sprites and the 150x36 logo,
- * and everything else is vector geometry generated per frame, so it re-renders
- * sharp at any size for free.
+ * SDL_SetVideoMode gives the canvas a fixed 640x480 backing store, which the
+ * browser then scales to whatever size the element occupies -- on a 2x display
+ * that is a doubling even in a window, and fullscreen stretches 640x480 across
+ * the whole screen. Nothing here is a low-resolution asset: the only bitmaps
+ * are two 128x128 glow sprites and the 150x36 logo, and everything else is
+ * vector geometry generated per frame, so it re-renders sharp at any size.
+ *
+ * Layout is owned entirely by CSS in shell.html (the canvas is 100% of a 4:3
+ * frame); this only reads that size back and gives the element that many device
+ * pixels. Setting the canvas size from here as well would fight the stylesheet.
  *
  * screenResized() already letterboxes the viewport to 4:3 and rebuilds the
  * projection from it, and the HUD pass uses its own glOrtho(0,640,480,...)
- * that maps onto the viewport rather than the framebuffer. So the backing
- * store can be any size and the game's own coordinate systems are unaffected.
+ * mapped onto the viewport rather than the framebuffer, so the backing store
+ * can be any size without disturbing the game's coordinate systems.
  */
+
 /*
  * Ceiling on the framebuffer's long edge.
  *
  * Native density on a large display is a lot of pixels: a 2056x1329 CSS screen
- * at devicePixelRatio 2 works out to 4112x2658, about 11 megapixels. The game
- * clears and additively blends the whole frame and issues several hundred small
- * primitives, so fill rate is what gives out first, and vector art gains very
- * little from the last doubling. 1920 keeps it visibly sharp for roughly a fifth
- * of the pixels.
+ * at devicePixelRatio 2 is 4112x2658, about 11 megapixels. The game clears and
+ * additively blends the whole frame and issues several hundred small primitives,
+ * so fill rate gives out first, and vector art gains very little from the last
+ * doubling. 1920 stays visibly sharp for roughly a fifth of the pixels.
  *
- * Only the backing store is capped -- the CSS box still fills the screen, so the
- * browser scales the result up. Raise this if you have GPU headroom and want
- * fullscreen closer to native; 2560 or 3840 are reasonable steps.
+ * Only the backing store is capped -- the CSS box still fills its frame, so the
+ * browser scales the result up. Raise it if you have GPU headroom; 2560 and 3840
+ * are reasonable steps.
  */
 #define RR_MAX_FB_LONG_EDGE 1920
 
-static void syncCanvasToDisplay(void) {
-  EmscriptenFullscreenChangeEvent fs;
-  double dpr = emscripten_get_device_pixel_ratio();
-  double cssW, cssH;
-  int w, h, longEdge;
+/*
+ * Phones are fill-rate bound long before they run out of pixels to address: the
+ * game clears and additively blends the entire frame every step, and a handset
+ * at devicePixelRatio 3 reaches the desktop cap trivially. Cap those lower.
+ * Detected via the pointer media query rather than a user-agent string, and
+ * cached because it cannot change for the life of the page.
+ */
+#define RR_MAX_FB_LONG_EDGE_COARSE 1280
 
-  /* The on-screen box and the backing store have to be set independently. A
-     canvas with no CSS size takes its layout size *from* its backing store, so
-     raising canvas.width on its own just makes the element twice as big at the
-     same density -- no sharper. Pin the CSS size first, then give it that many
-     device pixels. */
-  if (emscripten_get_fullscreen_status(&fs) == EMSCRIPTEN_RESULT_SUCCESS && fs.isFullscreen) {
-    cssW = fs.screenWidth;
-    cssH = fs.screenHeight;
-  } else {
-    cssW = SCREEN_WIDTH;
-    cssH = SCREEN_HEIGHT;
+static int rrMaxFramebufferEdge(void) {
+  static int cached = 0;
+  if (!cached) {
+    int coarse = EM_ASM_INT({
+      return (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 1 : 0;
+    });
+    cached = coarse ? RR_MAX_FB_LONG_EDGE_COARSE : RR_MAX_FB_LONG_EDGE;
   }
-  if (cssW <= 0 || cssH <= 0) return;
+  return cached;
+}
 
-  emscripten_set_element_css_size("#canvas", cssW, cssH);
+static void syncCanvasToDisplay(void) {
+  double dpr = emscripten_get_device_pixel_ratio();
+  double cssW = 0, cssH = 0;
+  int w, h, longEdge, curW = 0, curH = 0;
+
+  if (emscripten_get_element_css_size("#canvas", &cssW, &cssH) != EMSCRIPTEN_RESULT_SUCCESS)
+    return;
+  if (cssW <= 0 || cssH <= 0) return;
 
   w = (int)(cssW * dpr + 0.5);
   h = (int)(cssH * dpr + 0.5);
-  if (w <= 0 || h <= 0) return;
 
   longEdge = (w > h) ? w : h;
-  if (longEdge > RR_MAX_FB_LONG_EDGE) {
-    double scale = (double)RR_MAX_FB_LONG_EDGE / (double)longEdge;
+  if (longEdge > rrMaxFramebufferEdge()) {
+    double scale = (double)rrMaxFramebufferEdge() / (double)longEdge;
     w = (int)(w * scale + 0.5);
     h = (int)(h * scale + 0.5);
-    if (w <= 0 || h <= 0) return;
   }
+  if (w <= 0 || h <= 0) return;
+
+  /* Reallocating the drawing buffer every frame would be wasteful and can drop
+     the GL state on some drivers, so only touch it when it actually changes. */
+  emscripten_get_canvas_element_size("#canvas", &curW, &curH);
+  if (curW == w && curH == h) return;
 
   emscripten_set_canvas_element_size("#canvas", w, h);
   resized(w, h);
 }
 
-/* Applied at the top of the next frame rather than inline. Emscripten's own
-   requestFullscreen path may also set the canvas size (the shell's "Resize
-   canvas" checkbox decides), and both handlers run in the same task, so doing
-   this immediately makes the winner depend on listener order. Deferring one
-   frame means ours is always the last write. */
-static int canvasSyncPending = 1;
+/*
+ * Frames still owed a size check, applied at the top of drawGLSceneStart.
+ *
+ * A countdown rather than a flag for two reasons. Emscripten's own fullscreen
+ * path may also write the canvas size and runs in the same task as our handler,
+ * so applying inline would make the winner depend on listener order. And the
+ * element's CSS size can take a frame or two to settle after a fullscreen
+ * transition, so a single deferred check can read a stale box. Re-checking for
+ * a few frames costs nothing: syncCanvasToDisplay() returns immediately when
+ * the size already matches.
+ */
+static int canvasSyncPending = 4;
 
 static EM_BOOL onBrowserResize(int type, const EmscriptenUiEvent *e, void *user) {
   (void)type; (void)e; (void)user;
-  canvasSyncPending = 1;
+  canvasSyncPending = 4;
   return EM_FALSE;
 }
 
 static EM_BOOL onFullscreenChange(int type, const EmscriptenFullscreenChangeEvent *e, void *user) {
   (void)type; (void)e; (void)user;
-  canvasSyncPending = 1;
+  canvasSyncPending = 8;
   return EM_FALSE;
 }
 #endif
@@ -425,8 +446,8 @@ void moveScreenShake() {
 
 void drawGLSceneStart() {
 #ifdef __EMSCRIPTEN__
-  if (canvasSyncPending) {
-    canvasSyncPending = 0;
+  if (canvasSyncPending > 0) {
+    canvasSyncPending--;
     syncCanvasToDisplay();
   }
 #endif
