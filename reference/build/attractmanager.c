@@ -23,6 +23,9 @@
 #include "soundmanager.h"
 #include "degutil.h"
 #include "boss_mtd.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 int score;
 static int nextExtend, neAdd;
@@ -57,46 +60,118 @@ static void setMode(int m) {
   glClearColor(bgColor[m][0], bgColor[m][1], bgColor[m][2], 0.0f);
 }
 
+/*
+ * The preference blob: a version stamp, then a score and a cleared flag for
+ * every stage of every mode, then the stage and mode last played. Packed
+ * separately from the medium so the native file and the browser's localStorage
+ * hold exactly the same sequence of ints, in the same order as the original.
+ */
+#define PREF_INTS (1 + 2*MODE_NUM*STAGE_NUM + 2)
+
+static int prefBuf[PREF_INTS];
+
+static void prefPack() {
+  int i, j, n = 0;
+  prefBuf[n++] = VERSION_NUM;
+  for ( j=0 ; j<MODE_NUM ; j++ ) {
+    for ( i=0 ; i<STAGE_NUM ; i++ ) {
+      prefBuf[n++] = hiScore.score[j][i];
+      prefBuf[n++] = hiScore.cleard[j][i];
+    }
+  }
+  prefBuf[n++] = hiScore.stage;
+  prefBuf[n++] = hiScore.mode;
+}
+
+static void prefUnpack() {
+  int i, j, n = 1;              /* [0] is the version, checked by the caller */
+  for ( j=0 ; j<MODE_NUM ; j++ ) {
+    for ( i=0 ; i<STAGE_NUM ; i++ ) {
+      hiScore.score[j][i] = prefBuf[n++];
+      hiScore.cleard[j][i] = prefBuf[n++];
+    }
+  }
+  hiScore.stage = prefBuf[n++];
+  hiScore.mode = prefBuf[n++];
+  /* Saved state is user-writable -- localStorage plainly so -- and both of these
+     index arrays as soon as the title screen draws. */
+  if ( hiScore.stage < 0 || hiScore.stage >= STAGE_NUM ) hiScore.stage = 0;
+  if ( hiScore.mode < 0 || hiScore.mode >= MODE_NUM ) hiScore.mode = 0;
+}
+
+#ifdef __EMSCRIPTEN__
+/*
+ * There is no writable disk in the browser. The fopen calls would land in MEMFS,
+ * which is memory that goes with the tab, so the blob is kept in localStorage
+ * instead. Synchronous, unlike IDBFS, so loadPreference() still works as a plain
+ * call during startup.
+ */
+#define PREF_KEY "carnage451.pref"
+
+static int prefRead() {
+  return EM_ASM_INT({
+    try {
+      var s = localStorage.getItem(UTF8ToString($2));
+      if (!s) return 0;
+      var a = JSON.parse(s);
+      if (!Array.isArray(a) || a.length !== $1) return 0;
+      for (var i = 0; i < $1; i++) {
+        if (typeof a[i] !== 'number' || !isFinite(a[i])) return 0;
+      }
+      HEAP32.set(a, $0 >> 2);
+      return 1;
+    } catch (e) { return 0; }   /* private mode, or storage disabled */
+  }, prefBuf, PREF_INTS, PREF_KEY);
+}
+
+static void prefWrite() {
+  EM_ASM({
+    try {
+      localStorage.setItem(UTF8ToString($2),
+        JSON.stringify(Array.from(HEAP32.subarray($0 >> 2, ($0 >> 2) + $1))));
+    } catch (e) {}              /* out of quota, or storage disabled */
+  }, prefBuf, PREF_INTS, PREF_KEY);
+}
+#endif
+
 // Load preference.
 void loadPreference() {
+#ifdef __EMSCRIPTEN__
+  if ( !prefRead() ) {
+    initHiScore();
+    return;
+  }
+#else
   FILE *fp;
-  int i, j;
-  int version;
+  int n;
   if ( NULL == (fp = fopen(PREF_FILE,"rb")) ) {
     initHiScore();
     return;
   }
-  version = getw(fp);
-  if ( version != VERSION_NUM ) {
+  for ( n=0 ; n<PREF_INTS ; n++ ) prefBuf[n] = getw(fp);
+  fclose(fp);
+#endif
+  if ( prefBuf[0] != VERSION_NUM ) {
     initHiScore();
     return;
   }
-  for ( j=0 ; j<MODE_NUM ; j++ ) {
-    for ( i=0 ; i<STAGE_NUM ; i++ ) {
-      hiScore.score[j][i] = getw(fp);
-      hiScore.cleard[j][i] = getw(fp);
-    }
-  }
-  hiScore.stage = getw(fp);
-  hiScore.mode = getw(fp);
-  fclose(fp);
+  prefUnpack();
 }
 
 // Save preference.
 void savePreference() {
-  FILE *fp;
-  int i, j;
-  if ( NULL == (fp = fopen(PREF_FILE,"wb")) ) return;
-  putw(VERSION_NUM, fp);
-  for ( j=0 ; j<MODE_NUM ; j++ ) {
-    for ( i=0 ; i<STAGE_NUM ; i++ ) {
-      putw(hiScore.score[j][i], fp);
-      putw(hiScore.cleard[j][i], fp);
-    }
+  prefPack();
+#ifdef __EMSCRIPTEN__
+  prefWrite();
+#else
+  {
+    FILE *fp;
+    int n;
+    if ( NULL == (fp = fopen(PREF_FILE,"wb")) ) return;
+    for ( n=0 ; n<PREF_INTS ; n++ ) putw(prefBuf[n], fp);
+    fclose(fp);
   }
-  putw(hiScore.stage, fp);
-  putw(hiScore.mode, fp);
-  fclose(fp);
+#endif
 }
 
 static void gotoNextScene() {
@@ -155,6 +230,9 @@ void initGameState(int stg) {
   initGameStateFirst();
   hiScore.stage = stage = stg;
   hiScore.mode = mode;
+  /* Record where to come back to now, not on quit: a browser tab can be closed
+     or discarded without ever reaching quitLast(). */
+  savePreference();
   makeStageStr(stg);
   initStageState(stg);
 }
@@ -196,6 +274,7 @@ void setHiScore(int cleard) {
   if ( cleard ) {
     hiScore.cleard[mode][stage] = 1;
   }
+  savePreference();
 }
 
 /*
