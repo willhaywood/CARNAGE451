@@ -242,6 +242,16 @@
     bottom: calc(10% + env(safe-area-inset-bottom, 0px));
   }
 
+  /* Pause is a utility rather than a game action, so it is smaller than the bomb
+     and tucked into the top corner. In portrait the renderer keeps the HUD
+     readout clear of this corner; in landscape the corner is letterbox anyway. */
+  #bPause {
+    width: 46px; height: 46px;
+    font-size: .5rem;
+    top:   calc(8px + env(safe-area-inset-top, 0px));
+    right: calc(8px + env(safe-area-inset-right, 0px));
+  }
+
   /* In portrait the field runs the full width, so there is no dead space beside
      it — the button goes in the strip underneath instead, opposite the LEFT/BOMB
      readout which the renderer places on the left of that strip. */
@@ -297,7 +307,7 @@
     <div id="hud">
       <div id="keys">
         <kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> move
-        &nbsp; <kbd>Z</kbd> shoot &nbsp; <kbd>X</kbd> bomb &nbsp; <kbd>P</kbd> pause
+        &nbsp; <kbd>Z</kbd> shoot &nbsp; <kbd>X</kbd> bomb &nbsp; <kbd>P</kbd> / <kbd>Esc</kbd> pause
       </div>
       <button id="ptr" type="button" title="Drive the touch controls with the mouse">Touch test</button>
       <button id="fs" type="button">Fullscreen</button>
@@ -306,6 +316,7 @@
 
   <div id="touch" aria-hidden="true">
     <div id="dragsurface"></div>
+    <div class="tbtn" id="bPause">Pause</div>
     <div class="tbtn" id="bBomb">Bomb</div>
   </div>
 </div>
@@ -617,7 +628,6 @@
   const drag = { id: null, lx: 0, ly: 0, accX: 0, accY: 0,
                  dx: 0, dy: 0, t0: 0, moved: 0 };
   const btn = { bomb: false };
-  const down = new Set();
   let tapUntil = 0, pauseUntil = 0;
 
   const push = () => {
@@ -665,17 +675,9 @@
   if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) enableTouchUI();
 
   surface.addEventListener('pointerdown', (e) => {
-    // Right button is the mouse stand-in for the two-finger pause tap.
-    if (e.pointerType === 'mouse' && e.button === 2) { pulsePause(); e.preventDefault(); return; }
     if (e.pointerType === 'mouse' && e.button !== 0) return;
 
     enableTouchUI();
-    down.add(e.pointerId);
-    // Two-finger tap = pause. Fires on the second finger landing rather than on
-    // release, so it responds immediately; the bomb button stops propagation so
-    // reaching for it never counts as the second finger.
-    if (down.size === 2) pulsePause();
-
     if (drag.id !== null) { e.preventDefault(); return; }
     drag.id = e.pointerId;
     drag.lx = e.clientX; drag.ly = e.clientY;
@@ -704,7 +706,6 @@
   });
 
   const endDrag = (e) => {
-    down.delete(e.pointerId);
     if (e.pointerId !== drag.id) return;
     // A short, still press is a tap: pulse BUTTON1 so menus can be operated.
     // In play this is redundant (autofire already holds BUTTON1) and harmless.
@@ -717,8 +718,20 @@
   };
   surface.addEventListener('pointerup', endDrag);
   surface.addEventListener('pointercancel', endDrag);
-  // Right-click is the pause gesture, so suppress the menu it would open.
+  // A context menu over the playfield is never wanted while the surface is live.
   surface.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  /* Pause. A momentary pulse rather than a held button, so the lit state is on a
+     timer purely as feedback that the tap registered. */
+  const pauseEl = document.getElementById('bPause');
+  pauseEl.addEventListener('pointerdown', (e) => {
+    enableTouchUI();
+    pulsePause();
+    pauseEl.classList.add('on');
+    setTimeout(() => pauseEl.classList.remove('on'), TOUCH.tapHold);
+    e.preventDefault();
+    e.stopPropagation();               // must not also start a drag
+  });
 
   const bombEl = document.getElementById('bBomb');
   const bombDown = (e) => {
@@ -737,6 +750,20 @@
     e.preventDefault();
     e.stopPropagation();
   };
+  /* BUTTON2 is a bomb only in Normal mode: Psy rolls, Ika flips the ship's
+     polarity and GW releases the reflect force, so the label follows the mode.
+     Polled rather than pushed because it only ever changes at the title. */
+  const BTN2_LABEL = ['Bomb', 'Roll', 'Shift', 'Reflect'];
+  let btn2Label = null;
+  const syncBombLabel = () => {
+    if (!runtimeReady) return;
+    let m;
+    try { m = Module._rr_mode(); } catch (e) { return; }
+    const t = BTN2_LABEL[m] || BTN2_LABEL[0];
+    if (t !== btn2Label) { btn2Label = t; bombEl.textContent = t; }
+  };
+  setInterval(syncBombLabel, 500);
+
   bombEl.addEventListener('pointerdown', bombDown);
   bombEl.addEventListener('pointerup', bombUp);
   bombEl.addEventListener('pointercancel', bombUp);
@@ -755,7 +782,7 @@
     document.body.classList.toggle('touch', on || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches));
     ptrBtn.classList.toggle('on', on);
     keysEl.innerHTML = on
-      ? 'drag anywhere to move &nbsp;·&nbsp; autofire &nbsp;·&nbsp; <kbd>right-click</kbd> pause (two-finger tap on a phone)'
+      ? 'drag anywhere to move &nbsp;·&nbsp; autofire &nbsp;·&nbsp; pause button, top right'
       : keysHtml;
     if (!on) releaseAll();
   };
@@ -768,9 +795,9 @@
     drag.id = null;
     drag.accX = drag.accY = drag.dx = drag.dy = 0;
     btn.bomb = false;
-    down.clear();
     tapUntil = pauseUntil = 0;
     bombEl.classList.remove('on');
+    pauseEl.classList.remove('on');
     push();
   };
   window.addEventListener('blur', releaseAll);

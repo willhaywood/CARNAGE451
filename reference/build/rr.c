@@ -251,7 +251,13 @@ static void mainLoopIteration(void) {
   SDL_PollEvent(&event);
   keys = SDL_GetKeyState(NULL);
   buttons = getButtonState();
+#ifdef __EMSCRIPTEN__
+  /* Escape is a pause here, not a quit -- getButtonState() reports it as
+     PAD_BUTTONP -- so only a real quit event ends the loop. */
+  if ( event.type == SDL_QUIT ) done = 1;
+#else
   if ( keys[SDLK_ESCAPE] == SDL_PRESSED || event.type == SDL_QUIT ) done = 1;
+#endif
   if ( buttons & PAD_BUTTONP ) {
     if ( !pPrsd ) {
       if ( status == IN_GAME ) {

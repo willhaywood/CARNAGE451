@@ -174,6 +174,13 @@ void savePreference() {
 #endif
 }
 
+#ifdef __EMSCRIPTEN__
+/* The shell labels its second touch button from this. BUTTON2 only drops a bomb
+   in Normal; see the mode switch in moveShip(). */
+EMSCRIPTEN_KEEPALIVE
+int rr_mode() { return mode; }
+#endif
+
 static void gotoNextScene() {
   scene++;
   seed = seed*8513L + 179L;
@@ -293,8 +300,10 @@ void setHiScore(int cleard) {
  * drawBossState -- the shield bar, its two counters and the timer -- so the rows
  * here start below it.
  */
-#define RRP_ROW_1        80   /* score, and the stage label with the scene number */
-#define RRP_ROW_2       126   /* bonus score, and LEFT/BOMB */
+/* Rows clear the shell's pause button, an HTML overlay pinned to the top-right
+   corner: 46px at 8px inset reaches y 89 in HUD units on a 390-wide screen. */
+#define RRP_ROW_1       112   /* score, and the stage label with the scene number */
+#define RRP_ROW_2       158   /* bonus score, and LEFT/BOMB */
 #define RRP_RIGHT       604   /* right edge, mirroring the score's inset opposite */
 #define RRP_SCORE_SIZE   16
 #define RRP_BONUS_SIZE   12

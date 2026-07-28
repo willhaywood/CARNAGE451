@@ -167,7 +167,7 @@ static float rrFieldBot  = 480.0f; /* ...and its bottom edge */
    and the readout drawRPanel() lays out there in portrait. Reserving it costs no
    playfield on a phone: the field is limited by the width, so the leftover height
    would otherwise just sit unused below. */
-#define RR_TOP_STRIP   160
+#define RR_TOP_STRIP   190
 
 // Reset viewport when the screen is resized.
 static void screenResized() {
@@ -1343,6 +1343,17 @@ int getButtonState() {
   if (keys [SDLK_p] == SDL_PRESSED || btn5 || btn6 || btn7 || btn8 || btn9) {
     btn |= PAD_BUTTONP;
   }
+#ifdef __EMSCRIPTEN__
+  /* Escape pauses too, matching the on-screen button. It cannot keep its usual
+     job of quitting here -- there is nothing to quit to in a browser tab, and
+     doing so ends the run outright. See the quit check in rr.c.
+
+     Note the browser keeps Escape to itself while the canvas is fullscreen, so
+     there it leaves fullscreen instead of reaching the game. */
+  if (keys[SDLK_ESCAPE] == SDL_PRESSED) {
+    btn |= PAD_BUTTONP;
+  }
+#endif
 #ifdef __EMSCRIPTEN__
   btn |= rrTouchButtons();
 #endif
