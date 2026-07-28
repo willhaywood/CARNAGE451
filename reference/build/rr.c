@@ -50,6 +50,13 @@ static void initFirst() {
 }
 
 // Quit and save preference.
+#ifdef __EMSCRIPTEN__
+/* The shell only enables its menu button while the game is paused, so quitting
+   a run always takes two deliberate taps rather than one stray one. */
+EMSCRIPTEN_KEEPALIVE
+int rr_paused() { return status == PAUSE; }
+#endif
+
 void quitLast() {
   if ( !noSound ) closeSound();
   savePreference();
@@ -264,7 +271,7 @@ static void mainLoopIteration(void) {
      first, exactly as dying does, so quitting never loses it. No edge flag is
      needed -- the pulse outlives one frame, but initTitle() changes status, so
      the test fails on every frame after the first. */
-  if ( rrTouchMenu() && ( status == IN_GAME || status == PAUSE ) ) {
+  if ( rrTouchMenu() && status == PAUSE ) {
     setHiScore(0);
     initTitle();
   }

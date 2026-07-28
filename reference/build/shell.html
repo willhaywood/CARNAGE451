@@ -227,6 +227,11 @@
     -webkit-user-select: none; user-select: none;
     -webkit-tap-highlight-color: transparent;
   }
+  /* Inert, not hidden: the control stays where it is so its absence is not
+     mistaken for a missing feature, and it still swallows the tap rather than
+     letting it through to the drag surface and moving the ship. */
+  .tbtn.off { opacity: .16; }
+
   .tbtn.on {
     opacity: 1;
     border-color: var(--accent);
@@ -750,6 +755,8 @@
   pauseEl.addEventListener('pointerdown', (e) => {
     enableTouchUI();
     pulsePause();
+    // The sim toggles pause a frame or two later, so look again once it has.
+    setTimeout(syncPaused, TOUCH.tapHold + 40);
     pauseEl.classList.add('on');
     setTimeout(() => pauseEl.classList.remove('on'), TOUCH.tapHold);
     e.preventDefault();
@@ -834,16 +841,31 @@
     const t = BTN2_LABEL[m] || BTN2_LABEL[0];
     if (t !== btn2Label && segLabel(bombEl, t)) btn2Label = t;
   };
-  setInterval(syncLabels, 250);
+  setInterval(() => { syncLabels(); syncPaused(); }, 250);
 
+  /* Menu abandons the run, so it is only live while the game is paused: pause
+     first, then quit. That makes it two deliberate taps instead of one stray one
+     during play. C enforces the same rule; this only reflects it. */
   const menuEl = document.getElementById('bMenu');
+  let paused = false;
+  const syncPaused = () => {
+    let p = false;
+    try { p = runtimeReady && !!Module._rr_paused(); } catch (e) { p = false; }
+    if (p === paused) return;
+    paused = p;
+    menuEl.classList.toggle('off', !p);
+  };
+  menuEl.classList.add('off');
+
   menuEl.addEventListener('pointerdown', (e) => {
     enableTouchUI();
+    // Swallowed either way, so a tap on a dead button never starts a drag.
+    e.preventDefault();
+    e.stopPropagation();
+    if (!paused) return;
     pulseMenu();
     menuEl.classList.add('on');
     setTimeout(() => menuEl.classList.remove('on'), TOUCH.tapHold);
-    e.preventDefault();
-    e.stopPropagation();
   });
 
   bombEl.addEventListener('pointerdown', bombDown);
