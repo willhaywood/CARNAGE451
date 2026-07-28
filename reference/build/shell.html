@@ -48,6 +48,16 @@
     overflow: hidden;
     overscroll-behavior: none;
     -webkit-text-size-adjust: 100%;
+
+    /* A drag is steering, never a text selection. The canvas already opted out,
+       but the page around it did not, so a finger that started on the surface
+       could sweep a selection across the legend, the buttons and the gate and
+       turn them blue. Applied at the root, where everything inherits it; #diag
+       opts back in so a log can still be copied off a phone. */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;         /* no long-press "copy / share" bubble */
+    -webkit-tap-highlight-color: transparent;
   }
 
   #stage { position: fixed; inset: 0; display: grid; place-items: center; }
@@ -905,6 +915,13 @@
     menuEl.classList.remove('on');
     push();
   };
+  /* CSS covers this, but Safari will still start a selection in some cases, and
+     desktop browsers treat a drag as a potential drag-and-drop. Cancelling both
+     outside the diagnostics panel keeps a stray drag from painting the UI blue. */
+  const inDiag = (e) => !!(e.target && e.target.closest && e.target.closest('#diag'));
+  document.addEventListener('selectstart', (e) => { if (!inDiag(e)) e.preventDefault(); });
+  document.addEventListener('dragstart',   (e) => { if (!inDiag(e)) e.preventDefault(); });
+
   window.addEventListener('blur', releaseAll);
   document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
 })();
