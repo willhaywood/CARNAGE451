@@ -13,6 +13,26 @@
 #include "letterrender.h"
 #include "letterdata.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+
+/*
+ * Glyph data, for the shell to label its touch controls in the game's own
+ * segmented letterforms rather than a web font. The shell mirrors the box
+ * placement in drawLetter() below; handing it the source data instead of a
+ * transcription is what stops the two drifting apart.
+ *
+ * Fields are x, y, size, length and degrees. A degrees value above 99990 ends
+ * the glyph, and is also what an out-of-range request returns.
+ */
+EMSCRIPTEN_KEEPALIVE
+double rr_glyph(int idx, int seg, int field) {
+  if ( idx < 0 || idx >= (int)(sizeof(spData)/sizeof(spData[0])) ||
+       seg < 0 || seg >= 16 || field < 0 || field >= 5 ) return 99999.0;
+  return spData[idx][seg][field];
+}
+#endif
+
 void drawLetter(int idx, int lx, int ly, int ltSize, int d,
 		int r, int g, int b) {
   int i;

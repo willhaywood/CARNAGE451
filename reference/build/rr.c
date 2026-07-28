@@ -32,6 +32,7 @@
 #include "background.h"
 #include "soundmanager.h"
 #include "attractmanager.h"
+#include "touch.h"
 
 static int noSound = 0;
 
@@ -257,6 +258,16 @@ static void mainLoopIteration(void) {
   if ( event.type == SDL_QUIT ) done = 1;
 #else
   if ( keys[SDLK_ESCAPE] == SDL_PRESSED || event.type == SDL_QUIT ) done = 1;
+#endif
+#ifdef __EMSCRIPTEN__
+  /* Menu button: abandon the run and go back to the title. Banks the score
+     first, exactly as dying does, so quitting never loses it. No edge flag is
+     needed -- the pulse outlives one frame, but initTitle() changes status, so
+     the test fails on every frame after the first. */
+  if ( rrTouchMenu() && ( status == IN_GAME || status == PAUSE ) ) {
+    setHiScore(0);
+    initTitle();
+  }
 #endif
   if ( buttons & PAD_BUTTONP ) {
     if ( !pPrsd ) {

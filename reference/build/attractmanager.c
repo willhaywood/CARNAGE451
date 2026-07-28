@@ -300,10 +300,12 @@ void setHiScore(int cleard) {
  * drawBossState -- the shield bar, its two counters and the timer -- so the rows
  * here start below it.
  */
-/* Rows clear the shell's pause button, an HTML overlay pinned to the top-right
-   corner: 46px at 8px inset reaches y 89 in HUD units on a 390-wide screen. */
-#define RRP_ROW_1       112   /* score, and the stage label with the scene number */
-#define RRP_ROW_2       158   /* bonus score, and LEFT/BOMB */
+/* Rows clear the shell's pause and menu buttons, HTML overlays pinned to the
+   top-right corner: 44px tall at an 8px inset reaches y 85 in HUD units on a
+   390-wide screen. A letter reaches 1.33 * its size above and below its origin,
+   which is what sets the gaps between these rows. */
+#define RRP_ROW_1       113   /* score, and the stage label with the scene number */
+#define RRP_ROW_2       164   /* bonus score, and LEFT/BOMB */
 #define RRP_RIGHT       604   /* right edge, mirroring the score's inset opposite */
 #define RRP_SCORE_SIZE   16
 #define RRP_BONUS_SIZE   12

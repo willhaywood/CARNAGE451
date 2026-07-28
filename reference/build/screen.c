@@ -167,7 +167,7 @@ static float rrFieldBot  = 480.0f; /* ...and its bottom edge */
    and the readout drawRPanel() lays out there in portrait. Reserving it costs no
    playfield on a phone: the field is limited by the width, so the leftover height
    would otherwise just sit unused below. */
-#define RR_TOP_STRIP   190
+#define RR_TOP_STRIP   200
 
 // Reset viewport when the screen is resized.
 static void screenResized() {

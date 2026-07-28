@@ -192,7 +192,7 @@
     font-size: .8rem; font-weight: 600; letter-spacing: .2em;
     text-transform: uppercase; color: var(--accent);
   }
-  #gate small { color: var(--dim); font-size: .7rem; letter-spacing: .08em; }
+  #gate b { display: grid; place-items: center; }
 
   /* ---- touch controls ---- */
 
@@ -245,11 +245,26 @@
   /* Pause is a utility rather than a game action, so it is smaller than the bomb
      and tucked into the top corner. In portrait the renderer keeps the HUD
      readout clear of this corner; in landscape the corner is letterbox anyway. */
-  #bPause {
-    width: 46px; height: 46px;
-    font-size: .5rem;
-    top:   calc(8px + env(safe-area-inset-top, 0px));
-    right: calc(8px + env(safe-area-inset-right, 0px));
+  /* Utility controls: rounded rather than round, to tell them apart from the
+     action button and to give the segmented labels a usable width. They sit to
+     the right of everything the renderer draws in the top strip. */
+  .tbtn.util {
+    width: 40px; height: 44px;
+    border-radius: 6px;
+    top: calc(8px + env(safe-area-inset-top, 0px));
+  }
+  #bPause { right: calc(53px + env(safe-area-inset-right, 0px)); }
+  #bMenu  { right: calc(8px  + env(safe-area-inset-right, 0px)); }
+
+  /* Labels are drawn from the game's own glyph data, so the controls read as
+     part of the game rather than as a web page on top of it. Fill and outline
+     match drawBox: a half-transparent body with a solid 1px edge. */
+  .tbtn svg, #gate svg { display: block; height: .62rem; width: auto; max-width: 86%; }
+  #bBomb svg { height: .78rem; }
+  #gate svg  { height: 1.5rem; }
+  .tbtn svg rect, #gate svg rect {
+    fill: currentColor; fill-opacity: .5;
+    stroke: currentColor; stroke-width: 1; vector-effect: non-scaling-stroke;
   }
 
   /* In portrait the field runs the full width, so there is no dead space beside
@@ -300,8 +315,7 @@
     </div>
 
     <div id="gate" hidden>
-      <b>Tap to play</b>
-      <small>enables sound</small>
+      <b id="gateLabel">Play</b>
     </div>
 
     <div id="hud">
@@ -316,8 +330,9 @@
 
   <div id="touch" aria-hidden="true">
     <div id="dragsurface"></div>
-    <div class="tbtn" id="bPause">Pause</div>
-    <div class="tbtn" id="bBomb">Bomb</div>
+    <div class="tbtn util" id="bPause" aria-label="Pause">Pause</div>
+    <div class="tbtn util" id="bMenu" aria-label="Menu">Menu</div>
+    <div class="tbtn" id="bBomb" aria-label="Bomb">Bomb</div>
   </div>
 </div>
 
@@ -628,6 +643,7 @@
   const drag = { id: null, lx: 0, ly: 0, accX: 0, accY: 0,
                  dx: 0, dy: 0, t0: 0, moved: 0 };
   const btn = { bomb: false };
+  let menuUntil = 0;
   let tapUntil = 0, pauseUntil = 0;
 
   const push = () => {
@@ -656,7 +672,8 @@
        drag.id !== null ? 1 : 0,
        now < tapUntil   ? 1 : 0,
        btn.bomb         ? 1 : 0,
-       now < pauseUntil ? 1 : 0);
+       now < pauseUntil ? 1 : 0,
+       now < menuUntil  ? 1 : 0);
   };
 
   // Held rather than instantaneous: rr.c toggles pause on the press edge and
@@ -665,6 +682,12 @@
   const pulsePause = () => {
     if (Date.now() < pauseUntil) return;
     pauseUntil = Date.now() + TOUCH.tapHold;
+    push();
+    setTimeout(push, TOUCH.tapHold + 20);
+  };
+  const pulseMenu = () => {
+    if (Date.now() < menuUntil) return;
+    menuUntil = Date.now() + TOUCH.tapHold;
     push();
     setTimeout(push, TOUCH.tapHold + 20);
   };
@@ -750,19 +773,78 @@
     e.preventDefault();
     e.stopPropagation();
   };
+  /* Labels in the game's own segmented letterforms.
+     The glyph data comes from the module (rr_glyph) rather than being copied
+     here, and the geometry mirrors drawLetter(): one rect per segment, centred
+     on (x, -y) * size, with half-extents from the segment's size and length,
+     swapped when it stands upright. A letter spans 0.83 either side of its
+     origin and 1.33 above and below it; the pen advances 1.7 per character. */
+  const GLYPH_ADV = 1.7, GLYPH_HW = 0.83, GLYPH_HH = 1.33;
+  const glyphIndex = (c) => {
+    if (c >= '0' && c <= '9') return c.charCodeAt(0) - 48;
+    if (c >= 'a' && c <= 'z') return c.charCodeAt(0) - 87;   // folded to caps
+    if (c >= 'A' && c <= 'Z') return c.charCodeAt(0) - 55;
+    if (c === '.') return 36;
+    if (c === '-') return 38;
+    if (c === '+') return 39;
+    return 37;
+  };
+  const segLabel = (el, text) => {
+    if (!runtimeReady || !el) return false;
+    let g;
+    try { g = Module._rr_glyph; } catch (e) { return false; }
+    if (typeof g !== 'function') return false;
+    const r = [];
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === ' ') continue;
+      const gi = glyphIndex(text[i]), ox = i * GLYPH_ADV;
+      for (let sg = 0; sg < 16; sg++) {
+        const deg = g(gi, sg, 4);
+        if (deg > 99990) break;
+        const x = g(gi, sg, 0), y = -g(gi, sg, 1);
+        const size = g(gi, sg, 2) * 0.66, len = g(gi, sg, 3) * 0.6;
+        const d = ((deg % 180) + 180) % 180;
+        const upright = !(d <= 45 || d > 135);
+        const hw = upright ? len : size, hh = upright ? size : len;
+        r.push('<rect x="' + (ox + x - hw).toFixed(3) + '" y="' + (y - hh).toFixed(3) +
+               '" width="' + (2 * hw).toFixed(3) + '" height="' + (2 * hh).toFixed(3) + '"/>');
+      }
+    }
+    const w = (text.length - 1) * GLYPH_ADV + 2 * GLYPH_HW;
+    el.innerHTML = '<svg viewBox="' + (-GLYPH_HW).toFixed(3) + ' ' + (-GLYPH_HH).toFixed(3) +
+      ' ' + w.toFixed(3) + ' ' + (2 * GLYPH_HH).toFixed(3) +
+      '" preserveAspectRatio="xMidYMid meet" aria-hidden="true">' + r.join('') + '</svg>';
+    return true;
+  };
+
   /* BUTTON2 is a bomb only in Normal mode: Psy rolls, Ika flips the ship's
      polarity and GW releases the reflect force, so the label follows the mode.
      Polled rather than pushed because it only ever changes at the title. */
   const BTN2_LABEL = ['Bomb', 'Roll', 'Shift', 'Reflect'];
-  let btn2Label = null;
-  const syncBombLabel = () => {
+  let btn2Label = null, staticLabels = false;
+  const syncLabels = () => {
     if (!runtimeReady) return;
+    if (!staticLabels) {
+      staticLabels = segLabel(pauseEl, 'Pause') &&
+                     segLabel(document.getElementById('bMenu'), 'Menu') &&
+                     segLabel(document.getElementById('gateLabel'), 'Play');
+    }
     let m;
     try { m = Module._rr_mode(); } catch (e) { return; }
     const t = BTN2_LABEL[m] || BTN2_LABEL[0];
-    if (t !== btn2Label) { btn2Label = t; bombEl.textContent = t; }
+    if (t !== btn2Label && segLabel(bombEl, t)) btn2Label = t;
   };
-  setInterval(syncBombLabel, 500);
+  setInterval(syncLabels, 250);
+
+  const menuEl = document.getElementById('bMenu');
+  menuEl.addEventListener('pointerdown', (e) => {
+    enableTouchUI();
+    pulseMenu();
+    menuEl.classList.add('on');
+    setTimeout(() => menuEl.classList.remove('on'), TOUCH.tapHold);
+    e.preventDefault();
+    e.stopPropagation();
+  });
 
   bombEl.addEventListener('pointerdown', bombDown);
   bombEl.addEventListener('pointerup', bombUp);
@@ -795,9 +877,10 @@
     drag.id = null;
     drag.accX = drag.accY = drag.dx = drag.dy = 0;
     btn.bomb = false;
-    tapUntil = pauseUntil = 0;
+    tapUntil = pauseUntil = menuUntil = 0;
     bombEl.classList.remove('on');
     pauseEl.classList.remove('on');
+    menuEl.classList.remove('on');
     push();
   };
   window.addEventListener('blur', releaseAll);

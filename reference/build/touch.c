@@ -17,7 +17,7 @@ static int tAccX = 0, tAccY = 0;     /* finger travel since touchdown, field uni
 static int tDirX = 0, tDirY = 0;     /* 8.8 normalized offset direction, menus only */
 static int tTouching = 0;
 static int tTap = 0;
-static int tBomb = 0, tPause = 0;
+static int tBomb = 0, tPause = 0, tMenu = 0;
 
 /* Snapshot of ship.pos taken on the touch-down edge; the target is this plus
    the accumulated travel. */
@@ -26,7 +26,7 @@ static int tHaveBase = 0;
 
 EMSCRIPTEN_KEEPALIVE
 void rr_set_touch(int accX, int accY, int dirX, int dirY,
-                  int touching, int tap, int bomb, int pause) {
+                  int touching, int tap, int bomb, int pause, int menu) {
   if (touching && !tTouching) {
     /* Touch-down edge: anchor the target to wherever the ship currently is, so
        the first move is relative and the ship never jumps to the finger. */
@@ -39,7 +39,7 @@ void rr_set_touch(int accX, int accY, int dirX, int dirY,
   tAccX = accX; tAccY = accY;
   tDirX = dirX; tDirY = dirY;
   tTouching = touching; tTap = tap;
-  tBomb = bomb; tPause = pause;
+  tBomb = bomb; tPause = pause; tMenu = menu;
 }
 
 int rrTouchTarget(int *x, int *y) {
@@ -65,6 +65,10 @@ int rrTouchPad(void) {
   if (tDirY < -98) pad |= PAD_UP;
   if (tDirY >  98) pad |= PAD_DOWN;
   return pad;
+}
+
+int rrTouchMenu(void) {
+  return tMenu;
 }
 
 int rrTouchButtons(void) {

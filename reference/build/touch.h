@@ -41,6 +41,10 @@ int rrTouchButtons(void);
  */
 int rrTouchTarget(int *x, int *y);
 
+/* A tap on the shell's menu button: abandon the run and go back to the title.
+   Not a pad bit, because the original has no input bound to it at all. */
+int rrTouchMenu(void);
+
 /* True while autofire is driving BUTTON1. ship.c uses this to suppress the
    Normal-mode focus-slow, which under positional control would only lower the
    rate cap and make the ship lag behind the finger. */
