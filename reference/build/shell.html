@@ -422,6 +422,7 @@
   const diagEl = document.getElementById('diag');
   const errors = [];
   let drawCalls = 0, drawCallsPeak = 0, contextLost = false;
+  let frameStats = () => null;
 
   /* Observe the context rather than asking for one. Calling getContext()
      ourselves before emscripten does hands it a context created with the wrong
@@ -448,14 +449,21 @@
       const v = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
       if (v) maxVp = v[0] + 'x' + v[1];
     }
-    // Never touch Module.HEAP8 / HEAPU8 and friends: emscripten's getters call
-    // abort() when the symbol was not exported, which takes the whole runtime
-    // down. Reading it here is what made ?diag=1 kill startup.
+    /* Never *read* Module.HEAP8 / wasmMemory and friends. Emscripten defines them
+       as getters that call abort() when the symbol was not exported, and abort()
+       tears down the main loop. A try/catch is not protection: it swallows the
+       throw, but the runtime is already dead by then, so the game silently stops
+       while the panel cheerfully reports "n/a".
+
+       That is precisely what ?diag=1 was doing -- the game rendered nothing at
+       all with diagnostics on, which is the one situation where the numbers are
+       being read. Inspect the property descriptor instead, which never invokes
+       the getter, and only read through when it is a plain value. */
     let heap = 'n/a';
-    try {
-      const buf = window.Module && Module.wasmMemory && Module.wasmMemory.buffer;
-      if (buf) heap = (buf.byteLength / 1048576).toFixed(1) + ' MB';
-    } catch (_) { /* not exported either — leave as n/a */ }
+    const desc = window.Module && Object.getOwnPropertyDescriptor(Module, 'wasmMemory');
+    if (desc && !desc.get && desc.value && desc.value.buffer) {
+      heap = (desc.value.buffer.byteLength / 1048576).toFixed(1) + ' MB';
+    }
     return [
       'ua        ' + navigator.userAgent,
       'viewport  ' + innerWidth + 'x' + innerHeight + '  dpr ' + devicePixelRatio,
@@ -467,6 +475,15 @@
       'max vp    ' + maxVp,
       'wasm heap ' + heap,
       'draws/frm ' + drawCalls + '  peak ' + drawCallsPeak,
+      (() => {
+        const f = frameStats();
+        if (!f) return 'frame     measuring';
+        const pct = Math.round(f.cAvg / (1000 / 60) * 100);
+        return 'frame     ' + f.dAvg.toFixed(1) + ' ms avg  ' + f.dMax.toFixed(1) +
+                 ' worst   ' + Math.round(f.fps) + ' fps\n' +
+               'cpu/frame ' + f.cAvg.toFixed(2) + ' ms avg  ' + f.cMax.toFixed(2) +
+                 ' worst   ' + pct + '% of the 60Hz budget';
+      })(),
       'audio     ' + audioPlays + ' play() calls' +
         (audioFails.length ? '   rejected: ' + audioFails.join(',') : '   no rejections'),
     ].join('\n');
@@ -559,16 +576,64 @@
       if (!orig) continue;
       P.prototype.drawArrays = function (...a) { n++; return orig.apply(this, a); };
     }
+
+    /*
+     * Frame timing. Two numbers, because they answer different questions.
+     *
+     * The rAF interval is pinned to vsync: it reads 16.7ms whatever the game is
+     * doing, right up until frames actually start being missed. So it says
+     * whether the cadence is being met, and nothing about how close to the edge
+     * it is.
+     *
+     * The time spent inside the frame callbacks is the one that moves while the
+     * game is still comfortable, so it is what shows headroom -- and the only
+     * one that can tell whether a rendering change helped on a device that was
+     * hitting 60 either way.
+     *
+     * The panel's own refresh is deliberately excluded: it rebuilds a fair chunk
+     * of HTML, which on a phone can cost more than the frame being measured.
+     * It is scheduled through the unwrapped rAF so it is never counted, and
+     * throttled below so it is rarely even run.
+     */
+    const rafRaw = window.requestAnimationFrame.bind(window);
+    let cpuAccum = 0;
+    window.requestAnimationFrame = (cb) => rafRaw((t) => {
+      const s = performance.now();
+      try { return cb(t); } finally { cpuAccum += performance.now() - s; }
+    });
+
+    const N = 120;                      /* ~2s at 60Hz */
+    const dts = new Float32Array(N), cpus = new Float32Array(N);
+    let idx = 0, filled = 0, last = performance.now(), shownAt = 0;
+
+    frameStats = () => {
+      if (!filled) return null;
+      let dSum = 0, dMax = 0, cSum = 0, cMax = 0;
+      for (let i = 0; i < filled; i++) {
+        const d = dts[i], c = cpus[i];
+        dSum += d; if (d > dMax) dMax = d;
+        cSum += c; if (c > cMax) cMax = c;
+      }
+      const dAvg = dSum / filled;
+      return { dAvg, dMax, cAvg: cSum / filled, cMax, fps: dAvg > 0 ? 1000 / dAvg : 0 };
+    };
+
     const tick = () => {
       drawCalls = n; if (n > drawCallsPeak) drawCallsPeak = n; n = 0;
+
+      const now = performance.now();
+      dts[idx] = now - last; cpus[idx] = cpuAccum;
+      idx = (idx + 1) % N; if (filled < N) filled++;
+      last = now; cpuAccum = 0;
+
       // Reveal on the first frame after the runtime is live, never before: the
       // panel used to be shown at parse time, which aborted startup inside
       // initSDL before SDL_SetVideoMode ever ran.
       if (wantDiag && runtimeReady) { wantDiag = false; diagEl.hidden = false; }
-      if (!diagEl.hidden) showDiag();
-      requestAnimationFrame(tick);
+      if (!diagEl.hidden && now - shownAt > 250) { shownAt = now; showDiag(); }
+      rafRaw(tick);
     };
-    requestAnimationFrame(tick);
+    rafRaw(tick);
   })();
 
   const params = new URLSearchParams(location.search);
