@@ -34,6 +34,8 @@ int bonusScore;
 int bomb;
 
 #define SHIP_SPEED 1000
+/* Roll at full sideways speed. Enough to read at ship size, short of a barrel. */
+#define SHIP_BANK_DEG 26.0f
 #define SHIP_SLOW_SPEED 500
 #define SHIP_SLOW_DOWN 50
 #define SHIP_ROLLING_SPEED 300
@@ -65,6 +67,7 @@ static int btn2f;
 void initShip() {
   ship.pos.x = 0; ship.pos.y = FIELD_HEIGHT_8/5*2;
   ship.ppos = ship.pos;
+  ship.bank = 0;
   ship.cnt = 0; ship.laserCnt = 0;
   ship.invCnt = SHIP_INVINCIBLE_CNT_BASE;
   ship.bombCnt = 0;
@@ -369,6 +372,16 @@ void moveShip() {
     }
   }
 
+  /* Bank into the turn, from the ship's own sideways travel this step. Eased
+     rather than taken raw: the target flips to zero the instant a finger stops,
+     and snapping the roll back looks like a twitch. */
+  {
+    float target = (float)(ship.pos.x - ship.ppos.x) / (float)SHIP_SPEED;
+    if ( target >  1.0f ) target =  1.0f;
+    if ( target < -1.0f ) target = -1.0f;
+    ship.bank += (target * SHIP_BANK_DEG - ship.bank) * 0.18f;
+  }
+
   ship.cnt++;
   if ( ship.invCnt > 0 ) ship.invCnt--;
 }
@@ -413,7 +426,7 @@ void drawShip() {
   }
   ic = ship.invCnt&31;
   if ( ic > 0 && ic < 16 ) inv = 1;
-  drawShipShape(x, y, ship.d, inv);
+  drawShipShape(x, y, ship.d, ship.bank, inv);
 }
 
 void destroyShip() {

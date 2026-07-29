@@ -88,6 +88,9 @@ static GLfloat rrMV[16];
    compared against the old behaviour on a real device without another build. */
 static int rrBatchOn = 1;
 
+/* ?ship=drum keeps the original bare spinning drum, for comparison. */
+static int rrShipDrumOnly = 0;
+
 static void rrFlushOne(GLfloat *v, GLubyte *c, GLfloat *t,
                        int n, int hasTex, GLenum mode) {
   if (n == 0) return;
@@ -528,6 +531,7 @@ void initSDL() {
 #ifdef __EMSCRIPTEN__
   /* ?batch=0 -> one draw call per primitive, as before batching. */
   rrBatchOn = EM_ASM_INT({ return (window.rrBatch === 0) ? 0 : 1; });
+  rrShipDrumOnly = EM_ASM_INT({ return (window.rrShipDrum === 1) ? 1 : 0; });
 #endif
   Uint32 videoFlags;
 
@@ -860,14 +864,63 @@ void drawCore(GLfloat x, GLfloat y, int cnt, int r, int g, int b) {
   }
 }
 
-#define SHIP_DRUM_R 0.4f
-#define SHIP_DRUM_WIDTH 0.05f
-#define SHIP_DRUM_HEIGHT 0.35f
+/*
+ * The ship.
+ *
+ * The original is eight rectangles spun about the vertical axis -- a drum, with
+ * no silhouette to it. This keeps that drum, pulled in tight as a pair of inner
+ * wings so the motion survives, and hangs a hull and outer wings around it so
+ * the thing reads as a craft.
+ *
+ * Outlines only, no fill, like the drum it grew out of.
+ */
+#define SHIP_DRUM_N       6
+#define SHIP_DRUM_R       0.155f
+#define SHIP_DRUM_WIDTH   0.045f
+#define SHIP_DRUM_HEIGHT  0.235f
 
-void drawShipShape(GLfloat x, GLfloat y, float d, int inv) {
+/* Spire nose over a slab body with a stepped tail. The step is load-bearing:
+   without it the hull just reads as a triangle at this size. */
+static const GLfloat shipHull[][2] = {
+  { 0.000f, 0.52f}, {-0.030f, 0.32f}, {-0.052f, 0.14f}, {-0.095f, 0.00f},
+  {-0.095f,-0.20f}, {-0.052f,-0.20f}, {-0.052f,-0.30f}, {-0.020f,-0.30f},
+  {-0.020f,-0.24f}, { 0.020f,-0.24f}, { 0.020f,-0.30f}, { 0.052f,-0.30f},
+  { 0.052f,-0.20f}, { 0.095f,-0.20f}, { 0.095f, 0.00f}, { 0.052f, 0.14f},
+  { 0.030f, 0.32f},
+};
+/* Left wing; the right is the same mirrored. */
+static const GLfloat shipWing[][2] = {
+  {-0.200f, 0.12f}, {-0.325f, 0.05f}, {-0.410f,-0.30f}, {-0.250f,-0.30f},
+};
+
+static void shipOutline(const GLfloat pts[][2], int n, float xs) {
   int i;
+  glBegin(GL_LINE_LOOP);
+  for ( i=0 ; i<n ; i++ ) glVertex3f(pts[i][0]*xs, pts[i][1], 0);
+  glEnd();
+}
+
+static void shipDrum(float d) {
+  int i;
+  glRotatef(d, 0, 1, 0);
+  for ( i=0 ; i<SHIP_DRUM_N ; i++ ) {
+    glRotatef(360.0f/SHIP_DRUM_N, 0, 1, 0);
+    glBegin(GL_LINE_LOOP);
+    glVertex3f(-SHIP_DRUM_WIDTH, -SHIP_DRUM_HEIGHT, SHIP_DRUM_R);
+    glVertex3f( SHIP_DRUM_WIDTH, -SHIP_DRUM_HEIGHT, SHIP_DRUM_R);
+    glVertex3f( SHIP_DRUM_WIDTH,  SHIP_DRUM_HEIGHT, SHIP_DRUM_R);
+    glVertex3f(-SHIP_DRUM_WIDTH,  SHIP_DRUM_HEIGHT, SHIP_DRUM_R);
+    glEnd();
+  }
+}
+
+void drawShipShape(GLfloat x, GLfloat y, float d, float bank, int inv) {
   glPushMatrix();
   glTranslatef(x, y, 0);
+
+  /* The hit box is the collision point, not decoration, so it is drawn before
+     the roll -- banking it would turn the square into a diamond and misreport
+     the shape you are actually dodging with. */
   glColor4ub(255, 100, 100, 255);
   glBegin(GL_TRIANGLE_FAN);
   glVertex3f(-SHAPE_POINT_SIZE_L, -SHAPE_POINT_SIZE_L,  0);
@@ -879,22 +932,26 @@ void drawShipShape(GLfloat x, GLfloat y, float d, int inv) {
     glPopMatrix();
     return;
   }
-  glRotatef(d, 0, 1, 0);
+
+  /* Negative: GL turns anticlockwise about +Z, and a ship moving right drops
+     its right wing. */
+  glRotatef(-bank, 0, 0, 1);
+
+  if ( rrShipDrumOnly ) {
     glColor4ub(120, 220, 100, 150);
-    /*if ( mode == IKA_MODE ) {
-    glColor4ub(180, 200, 160, 150);
-  } else {
-    glColor4ub(120, 220, 100, 150);
-    }*/
-  for ( i=0 ; i<8 ; i++ ) {
-    glRotatef(45, 0, 1, 0);
-    glBegin(GL_LINE_LOOP);
-    glVertex3f(-SHIP_DRUM_WIDTH, -SHIP_DRUM_HEIGHT, SHIP_DRUM_R);
-    glVertex3f( SHIP_DRUM_WIDTH, -SHIP_DRUM_HEIGHT, SHIP_DRUM_R);
-    glVertex3f( SHIP_DRUM_WIDTH,  SHIP_DRUM_HEIGHT, SHIP_DRUM_R);
-    glVertex3f(-SHIP_DRUM_WIDTH,  SHIP_DRUM_HEIGHT, SHIP_DRUM_R);
-    glEnd();
+    shipDrum(d);
+    glPopMatrix();
+    return;
   }
+
+  glColor4ub(120, 220, 100, 255);
+  shipOutline(shipWing, (int)(sizeof(shipWing)/sizeof(shipWing[0])),  1.0f);
+  shipOutline(shipWing, (int)(sizeof(shipWing)/sizeof(shipWing[0])), -1.0f);
+  shipOutline(shipHull, (int)(sizeof(shipHull)/sizeof(shipHull[0])),  1.0f);
+
+  glColor4ub(120, 220, 100, 160);
+  shipDrum(d);
+
   glPopMatrix();
 }
 

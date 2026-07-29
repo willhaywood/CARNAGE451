@@ -20,6 +20,7 @@
 
 typedef struct {
   Vector pos, ppos, bombPos;
+  float bank;              /* degrees, positive when moving right */
   int cnt, laserCnt;
   int speed;
   int invCnt;
