@@ -467,7 +467,7 @@
     return [
       'ua        ' + navigator.userAgent,
       'fb cap    ' + (window.rrFbCap || 'default'),
-      'interp    ' + (window.rrInterp ? 'on  (?interp=1)' : 'off'),
+      'interp    ' + (window.rrInterp ? 'on' : 'off (?interp=0)'),
       'batching  ' + (window.rrBatch === 0 ? 'off (?batch=0)' : 'on'),
       'webgl     ' + ver,
       'renderer  ' + renderer,
@@ -493,8 +493,7 @@
         '   backing ' + c.width + 'x' + c.height + (contextLost ? '   CONTEXT LOST' : ''),
       'draws/frm ' + drawCalls + '  peak ' + drawCallsPeak,
       frameLines,
-      'audio     ' + audioPlays + ' play() calls' +
-        (audioFails.length ? '   rejected: ' + audioFails.join(',') : '   no rejections'),
+      'audio     ' + audioSummary(),
     ].join('\n');
   };
 
@@ -564,21 +563,30 @@
   /* Emscripten's SDL_mixer calls <audio>.play() without attaching a catch, so on
      iOS every rejection surfaced as an unhandled promise. Swallow them here and
      record the reason, so audio problems are visible without being fatal. */
-  let audioPlays = 0, audioFails = [];
+  let audioPlays = 0, audioOk = 0;
+  const audioFails = Object.create(null);
   (() => {
     const ME = HTMLMediaElement.prototype, orig = ME.play;
     if (!orig) return;
+    const note = (n) => { audioFails[n] = (audioFails[n] || 0) + 1; };
     ME.play = function (...a) {
       audioPlays++;
       let p;
-      try { p = orig.apply(this, a); } catch (err) { audioFails.push(String(err && err.name)); return; }
-      if (p && p.catch) p.catch((err) => {
-        const n = (err && err.name) || 'Error';
-        if (audioFails.length < 8) audioFails.push(n);
-      });
+      try { p = orig.apply(this, a); } catch (err) { note(String(err && err.name)); return; }
+      /* Counted by name rather than listed: the question is what share of sounds
+         are being dropped, and a list of the first few cannot answer it. */
+      if (p && p.then) p.then(() => audioOk++, (err) => note((err && err.name) || 'Error'));
       return p;
     };
   })();
+  const audioSummary = () => {
+    const names = Object.keys(audioFails);
+    if (!names.length) return audioPlays + ' play()  all ok';
+    const failed = names.reduce((t, k) => t + audioFails[k], 0);
+    return audioPlays + ' play()  ' + audioOk + ' ok  ' + failed + ' failed (' +
+           Math.round(failed / audioPlays * 100) + '%)\n' +
+           '          ' + names.map((k) => audioFails[k] + ' ' + k).join(', ');
+  };
 
   // WebKit drops WebGL contexts aggressively under memory pressure. The stock
   // emscripten shell alerted on this; that was lost in the rewrite, so a lost
@@ -672,10 +680,11 @@
 
   const params = new URLSearchParams(location.search);
   if (params.has('fb')) window.rrFbCap = parseInt(params.get('fb'), 10) || 0;
-  // ?interp=1 draws movers between simulation steps, so a 120Hz panel shows 120
-  // distinct frames instead of the same 62.5 twice. Off by default: it trails the
-  // newest state by up to one 16ms step, which is a real trade in a dodging game.
-  if (params.get('interp') === '1') window.rrInterp = 1;
+  // Movers are drawn between simulation steps, so a 120Hz panel shows 120 distinct
+  // frames rather than the same 62.5 twice. On by default now that there is the
+  // headroom to use it; ?interp=0 goes back to drawing only stepped positions,
+  // which trades the smoothness for not being a step behind the newest state.
+  window.rrInterp = (params.get('interp') === '0') ? 0 : 1;
   // ?batch=0 turns off draw-call batching, for comparing against the old
   // one-draw-per-primitive behaviour on a device.
   if (params.get('batch') === '0') window.rrBatch = 0;
