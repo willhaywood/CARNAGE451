@@ -471,6 +471,7 @@
         '   backing ' + c.width + 'x' + c.height,
       'fb cap    ' + (window.rrFbCap || 'default') + (contextLost ? '   <b>WEBGL CONTEXT LOST</b>' : ''),
       'interp    ' + (window.rrInterp ? 'on  (?interp=1)' : 'off'),
+      'batching  ' + (window.rrBatch === 0 ? 'off (?batch=0)' : 'on'),
       'webgl     ' + ver,
       'renderer  ' + renderer,
       'max vp    ' + maxVp,
@@ -643,6 +644,9 @@
   // distinct frames instead of the same 62.5 twice. Off by default: it trails the
   // newest state by up to one 16ms step, which is a real trade in a dodging game.
   if (params.get('interp') === '1') window.rrInterp = 1;
+  // ?batch=0 turns off draw-call batching, for comparing against the old
+  // one-draw-per-primitive behaviour on a device.
+  if (params.get('batch') === '0') window.rrBatch = 0;
   if (params.has('diag')) { wantDiag = true; pinned = true; }  // revealed by the frame ticker
   diagEl.addEventListener('pointerdown', (e) => { diagEl.hidden = true; pinned = false; e.stopPropagation(); });
 

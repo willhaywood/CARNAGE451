@@ -55,81 +55,174 @@
  * real GL entry points.
  */
 
-/* Largest block is drawCircle: a centre vertex plus 16 loop iterations of two. */
-#define RR_MAX_BATCH_VERTS 256
+/* Scratch for the one primitive glBegin/glEnd is currently assembling.
+   drawCircle is the largest: a centre vertex plus 16 iterations of two. */
+#define RR_PRIM_MAX  64
+/* The batch. Flushed on every state change, so it rarely approaches this. */
+#define RR_BATCH_MAX 8192
 
-static GLfloat rrVtx[RR_MAX_BATCH_VERTS * 3];
-static GLubyte rrCol[RR_MAX_BATCH_VERTS * 4];
-static GLfloat rrTex[RR_MAX_BATCH_VERTS * 2];
+static GLfloat rrPX[RR_PRIM_MAX], rrPY[RR_PRIM_MAX], rrPZ[RR_PRIM_MAX];
+static GLubyte rrPC[RR_PRIM_MAX*4];
+static GLfloat rrPT[RR_PRIM_MAX*2];
+static int     rrPN = 0;
+static GLenum  rrPMode = GL_TRIANGLE_FAN;
+static int     rrPHasTex = 0;
 
-static int     rrCount   = 0;
-static GLenum  rrMode    = GL_TRIANGLE_FAN;
-static int     rrHasTex  = 0;
+/* Two batches run concurrently, because a draw call takes one primitive type.
+   Everything is decomposed into independent triangles or independent lines so
+   that consecutive primitives concatenate instead of each needing its own call. */
+static GLfloat rrTV[RR_BATCH_MAX*3]; static GLubyte rrTC[RR_BATCH_MAX*4];
+static GLfloat rrTT[RR_BATCH_MAX*2]; static int rrTN = 0, rrTTex = 0;
+static GLfloat rrLV[RR_BATCH_MAX*3]; static GLubyte rrLC[RR_BATCH_MAX*4];
+static GLfloat rrLT[RR_BATCH_MAX*2]; static int rrLN = 0, rrLTex = 0;
+
 static GLubyte rrCurCol[4] = { 255, 255, 255, 255 };
 static GLfloat rrCurTex[2] = { 0.0f, 0.0f };
 
-static void rrBegin(GLenum mode) {
-  /* GLES2/WebGL has no GL_QUADS, and emscripten's glDrawArrays path excludes
-     it explicitly. The one GL_QUADS block here is a single four-vertex
-     rectangle, for which a triangle fan over the same corners is identical. */
-  rrMode   = (mode == GL_QUADS) ? GL_TRIANGLE_FAN : mode;
-  rrCount  = 0;
-  rrHasTex = 0;
+/* Modelview at the time the primitive began. Vertices are transformed by it on
+   the way into the batch, so a glTranslatef between two primitives no longer
+   forces them apart -- which is what made every object its own draw call. */
+static GLfloat rrMV[16];
+
+/* ?batch=0 falls back to a draw call per primitive, so the batching can be
+   compared against the old behaviour on a real device without another build. */
+static int rrBatchOn = 1;
+
+static void rrFlushOne(GLfloat *v, GLubyte *c, GLfloat *t,
+                       int n, int hasTex, GLenum mode) {
+  if (n == 0) return;
+  /* Vertices arrive already in eye space, so the modelview must be identity for
+     the draw itself. Projection is left alone and still done by GL. */
+  glPushMatrix();
+  glLoadIdentity();
+  glEnableClientState(GL_VERTEX_ARRAY);
+  glVertexPointer(3, GL_FLOAT, 0, v);
+  glEnableClientState(GL_COLOR_ARRAY);
+  glColorPointer(4, GL_UNSIGNED_BYTE, 0, c);
+  if (hasTex) {
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glTexCoordPointer(2, GL_FLOAT, 0, t);
+  }
+  glDrawArrays(mode, 0, n);
+  if (hasTex) glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+  glDisableClientState(GL_COLOR_ARRAY);
+  glDisableClientState(GL_VERTEX_ARRAY);
+  glPopMatrix();
 }
 
-/* Colour is latched, not forwarded: every vertex gets an explicit copy, so the
-   fixed-function current-colour state is never consulted. Calls that happen
-   outside a block (the common case here) simply set the colour used by the
-   next block, which is what the original code relies on. */
+/*
+ * Reordering triangles ahead of lines within a flush is safe, and that is what
+ * makes this work at all: blending is additive (GL_SRC_ALPHA, GL_ONE) and the
+ * depth test is off, so blended geometry composites commutatively -- the result
+ * does not depend on the order it was submitted in. Any state change that would
+ * break that assumption flushes first.
+ */
+static void rrFlush(void) {
+  rrFlushOne(rrTV, rrTC, rrTT, rrTN, rrTTex, GL_TRIANGLES);
+  rrTN = 0; rrTTex = 0;
+  rrFlushOne(rrLV, rrLC, rrLT, rrLN, rrLTex, GL_LINES);
+  rrLN = 0; rrLTex = 0;
+}
+
+static void rrBegin(GLenum mode) {
+  rrPMode   = mode;
+  rrPN      = 0;
+  rrPHasTex = 0;
+  glGetFloatv(GL_MODELVIEW_MATRIX, rrMV);
+}
+
+/* Colour is latched, not forwarded: every vertex carries an explicit copy, so
+   the fixed-function current-colour state is never consulted. */
 static void rrColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a) {
   rrCurCol[0] = r; rrCurCol[1] = g; rrCurCol[2] = b; rrCurCol[3] = a;
 }
 
 static void rrTexCoord2f(GLfloat u, GLfloat v) {
   rrCurTex[0] = u; rrCurTex[1] = v;
-  rrHasTex = 1;
+  rrPHasTex = 1;
 }
 
 static void rrPushVertex(GLfloat x, GLfloat y, GLfloat z) {
-  int i = rrCount;
-  if (i >= RR_MAX_BATCH_VERTS) return;
-  rrVtx[i*3+0] = x; rrVtx[i*3+1] = y; rrVtx[i*3+2] = z;
-  rrCol[i*4+0] = rrCurCol[0]; rrCol[i*4+1] = rrCurCol[1];
-  rrCol[i*4+2] = rrCurCol[2]; rrCol[i*4+3] = rrCurCol[3];
-  rrTex[i*2+0] = rrCurTex[0]; rrTex[i*2+1] = rrCurTex[1];
-  rrCount++;
+  int i = rrPN;
+  if (i >= RR_PRIM_MAX) return;
+  /* Column-major, as GL stores it. */
+  rrPX[i] = rrMV[0]*x + rrMV[4]*y + rrMV[8] *z + rrMV[12];
+  rrPY[i] = rrMV[1]*x + rrMV[5]*y + rrMV[9] *z + rrMV[13];
+  rrPZ[i] = rrMV[2]*x + rrMV[6]*y + rrMV[10]*z + rrMV[14];
+  rrPC[i*4+0] = rrCurCol[0]; rrPC[i*4+1] = rrCurCol[1];
+  rrPC[i*4+2] = rrCurCol[2]; rrPC[i*4+3] = rrCurCol[3];
+  rrPT[i*2+0] = rrCurTex[0]; rrPT[i*2+1] = rrCurTex[1];
+  rrPN++;
 }
 
 static void rrVertex3f(GLfloat x, GLfloat y, GLfloat z) { rrPushVertex(x, y, z); }
 static void rrVertex2f(GLfloat x, GLfloat y)            { rrPushVertex(x, y, 0.0f); }
 
-static void rrEnd(void) {
-  if (rrCount == 0) return;
-
-  glEnableClientState(GL_VERTEX_ARRAY);
-  glVertexPointer(3, GL_FLOAT, 0, rrVtx);
-  glEnableClientState(GL_COLOR_ARRAY);
-  glColorPointer(4, GL_UNSIGNED_BYTE, 0, rrCol);
-  if (rrHasTex) {
-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    glTexCoordPointer(2, GL_FLOAT, 0, rrTex);
+/* Copy scratch vertex src into the triangle or line batch. */
+static void rrEmit(int line, int src) {
+  GLfloat *v; GLubyte *c; GLfloat *t; int n;
+  if (line) {
+    if (rrLN >= RR_BATCH_MAX) return;
+    v = rrLV; c = rrLC; t = rrLT; n = rrLN++;
+    if (rrPHasTex) rrLTex = 1;
+  } else {
+    if (rrTN >= RR_BATCH_MAX) return;
+    v = rrTV; c = rrTC; t = rrTT; n = rrTN++;
+    if (rrPHasTex) rrTTex = 1;
   }
-
-  glDrawArrays(rrMode, 0, rrCount);
-
-  if (rrHasTex) glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-  glDisableClientState(GL_COLOR_ARRAY);
-  glDisableClientState(GL_VERTEX_ARRAY);
-
-  rrCount = 0;
+  v[n*3+0] = rrPX[src]; v[n*3+1] = rrPY[src]; v[n*3+2] = rrPZ[src];
+  c[n*4+0] = rrPC[src*4+0]; c[n*4+1] = rrPC[src*4+1];
+  c[n*4+2] = rrPC[src*4+2]; c[n*4+3] = rrPC[src*4+3];
+  t[n*2+0] = rrPT[src*2+0]; t[n*2+1] = rrPT[src*2+1];
 }
 
-#define glBegin      rrBegin
-#define glEnd        rrEnd
-#define glVertex3f   rrVertex3f
-#define glVertex2f   rrVertex2f
-#define glColor4ub   rrColor4ub
-#define glTexCoord2f rrTexCoord2f
+/* Decompose into independent primitives so batches can simply concatenate.
+   GLES2 has no GL_QUADS at all; the one four-vertex block here is identical as
+   a fan over the same corners. */
+static void rrEnd(void) {
+  int i, n = rrPN;
+  if (n < 2) { rrPN = 0; return; }
+  switch (rrPMode) {
+  case GL_TRIANGLE_FAN:
+  case GL_QUADS:
+    for (i = 1; i+1 < n; i++) { rrEmit(0, 0); rrEmit(0, i); rrEmit(0, i+1); }
+    break;
+  case GL_TRIANGLE_STRIP:
+    for (i = 0; i+2 < n; i++) {
+      if (i & 1) { rrEmit(0, i+1); rrEmit(0, i); rrEmit(0, i+2); }
+      else       { rrEmit(0, i);   rrEmit(0, i+1); rrEmit(0, i+2); }
+    }
+    break;
+  case GL_LINE_LOOP:
+    for (i = 0; i < n; i++) { rrEmit(1, i); rrEmit(1, (i+1) % n); }
+    break;
+  case GL_LINE_STRIP:
+    for (i = 0; i+1 < n; i++) { rrEmit(1, i); rrEmit(1, i+1); }
+    break;
+  case GL_LINES:
+  default:
+    for (i = 0; i+1 < n; i += 2) { rrEmit(1, i); rrEmit(1, i+1); }
+    break;
+  }
+  rrPN = 0;
+  if (!rrBatchOn) rrFlush();
+}
+
+/* Anything that changes how subsequent geometry is rasterised ends the batch.
+   Defined ahead of the macros below so their own calls reach real GL. */
+static void rrEnableGL(GLenum cap)  { rrFlush(); glEnable(cap); }
+static void rrDisableGL(GLenum cap) { rrFlush(); glDisable(cap); }
+static void rrBindTexture(GLenum target, GLuint tex) { rrFlush(); glBindTexture(target, tex); }
+
+#define glBegin       rrBegin
+#define glEnd         rrEnd
+#define glVertex3f    rrVertex3f
+#define glVertex2f    rrVertex2f
+#define glColor4ub    rrColor4ub
+#define glTexCoord2f  rrTexCoord2f
+#define glEnable      rrEnableGL
+#define glDisable     rrDisableGL
+#define glBindTexture rrBindTexture
 #endif /* __EMSCRIPTEN__ */
 
 #define FAR_PLANE 720
@@ -432,6 +525,10 @@ Uint8 *keys;
 SDL_Joystick *stick = NULL;
 
 void initSDL() {
+#ifdef __EMSCRIPTEN__
+  /* ?batch=0 -> one draw call per primitive, as before batching. */
+  rrBatchOn = EM_ASM_INT({ return (window.rrBatch === 0) ? 0 : 1; });
+#endif
   Uint32 videoFlags;
 
   if ( lowres ) {
@@ -542,6 +639,9 @@ void drawGLSceneEnd() {
 }
 
 void swapGLScene() {
+#ifdef __EMSCRIPTEN__
+  rrFlush();                 /* nothing may outlive the frame it was built in */
+#endif
   SDL_GL_SwapBuffers();
 }
 
@@ -1110,6 +1210,11 @@ void drawShot(GLfloat x, GLfloat y, GLfloat d, int c, float width, float height)
 }
 
 void startDrawBoards() {
+#ifdef __EMSCRIPTEN__
+  /* Batched vertices are eye space, still to be projected -- so they must be
+     drawn under the projection they were built for, not the next one. */
+  rrFlush();
+#endif
   glMatrixMode(GL_PROJECTION);
   glPushMatrix();
   glLoadIdentity();
@@ -1128,6 +1233,9 @@ void startDrawBoards() {
 }
 
 void endDrawBoards() {
+#ifdef __EMSCRIPTEN__
+  rrFlush();
+#endif
   glPopMatrix();
   screenResized();
 }
