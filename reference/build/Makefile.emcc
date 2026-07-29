@@ -14,6 +14,17 @@ CXX     = em++
 
 # LEGACY_GL_EMULATION provides glBegin/glEnd immediate mode and the GLU
 # entry points (gluPerspective/gluLookAt) that screen.c relies on.
+#
+# GL_FFP_ONLY says the game never uses shaders of its own, which it does not --
+# there is not a single glCreateShader/glUseProgram in the source. That lets the
+# emulation stop restoring global GL state after every draw. Measured over the
+# same scene it takes a draw from 12.55 WebGL calls to 9.54: useProgram falls
+# from 2.00 per draw to 0.01, and bindBuffer from 2.00 to 1.00.
+#
+# GL_UNSAFE_OPTS stays off. It was measured too and changed nothing (12.51 vs
+# 12.55) because its fast path requires the modelview to be untouched, and this
+# game translates or rotates before nearly every primitive. It is explicitly
+# heuristic, so there is no reason to carry the risk for no gain.
 PORTS   = -sUSE_SDL=1 -sUSE_SDL_MIXER=1
 COMPAT  = -include emscripten_compat.h
 WARN    = -Wno-\#warnings -Wno-string-plus-int -Wno-deprecated-declarations
@@ -42,6 +53,7 @@ LDFLAGS = $(PORTS) \
 	--shell-file $(SHELL_HTML) \
 	-sLEGACY_GL_EMULATION=1 \
 	-sGL_UNSAFE_OPTS=0 \
+	-sGL_FFP_ONLY=1 \
 	-sALLOW_MEMORY_GROWTH=1 \
 	-sEXIT_RUNTIME=0 \
 	-sASSERTIONS=1 \
