@@ -15,6 +15,12 @@ CXX     = em++
 # LEGACY_GL_EMULATION provides glBegin/glEnd immediate mode and the GLU
 # entry points (gluPerspective/gluLookAt) that screen.c relies on.
 #
+# SDL_canPlayWithWebAudio is only compiled in when it is declared incoming, so
+# the list has to be spelled out -- it replaces the default rather than adding to
+# it. Everything before it is emscripten's own default set. noAudioDecoding is
+# deliberately absent: the preload plugin reads it unguarded, and naming it here
+# is rejected as an invalid entry.
+#
 # GL_FFP_ONLY says the game never uses shaders of its own, which it does not --
 # there is not a single glCreateShader/glUseProgram in the source. That lets the
 # emulation stop restoring global GL state after every draw. Measured over the
@@ -51,6 +57,7 @@ SHELL_HTML = shell.html
 
 LDFLAGS = $(PORTS) \
 	--shell-file $(SHELL_HTML) \
+	-sINCOMING_MODULE_JS_API=ENVIRONMENT,arguments,canvas,dynamicLibraries,elementPointerLock,instantiateWasm,locateFile,monitorRunDependencies,noExitRuntime,noInitialRun,onAbort,onExit,onRuntimeInitialized,postRun,preInit,preRun,print,printErr,setStatus,statusMessage,stderr,stdin,stdout,thisProgram,wasm,websocket,SDL_canPlayWithWebAudio \
 	-sLEGACY_GL_EMULATION=1 \
 	-sGL_UNSAFE_OPTS=0 \
 	-sGL_FFP_ONLY=1 \

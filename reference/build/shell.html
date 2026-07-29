@@ -394,9 +394,29 @@
 
   let runtimeReady = false;
 
+  /*
+   * Sound effects go through Web Audio, music stays on an <audio> element.
+   *
+   * Mix_PlayChannel clones the preloaded <audio> element for every sound and
+   * plays the clone. iOS unlocks individual media elements during a user
+   * gesture, not the page, so a clone made later has never been unlocked and
+   * play() rejects: measured on an iPhone, 99 of 126 effects failed with
+   * NotAllowedError. The Web Audio path has no element to unlock, and no
+   * per-sound cloning either.
+   *
+   * Music deliberately does not follow. It would be decoded to PCM up front,
+   * and these three tracks are about 2MB of MP3 -- something like 100MB once
+   * decoded, which is not a trade worth making on a phone for something that
+   * already works. noAudioDecoding stops the preload plugin building elements;
+   * SDL_canPlayWithWebAudio then picks per file, and effects are the .wav ones.
+   */
+  const webAudioSfx = new URLSearchParams(location.search).get('webaudio') !== '0';
+
   window.Module = {
     canvas,
     setStatus,
+    noAudioDecoding: webAudioSfx,
+    SDL_canPlayWithWebAudio: (name) => webAudioSfx && /\.wav$/i.test(name || ''),
     onRuntimeInitialized() { runtimeReady = true; },
     print:    (...a) => console.log(...a),
     printErr: (...a) => console.error(...a),
@@ -469,6 +489,7 @@
       'fb cap    ' + (window.rrFbCap || 'default'),
       'interp    ' + (window.rrInterp ? 'on' : 'off (?interp=0)'),
       'batching  ' + (window.rrBatch === 0 ? 'off (?batch=0)' : 'on'),
+      'sfx path  ' + (webAudioSfx ? 'web audio' : '<audio> (?webaudio=0)'),
       'webgl     ' + ver,
       'renderer  ' + renderer,
       'max vp    ' + maxVp,
