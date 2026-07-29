@@ -438,7 +438,7 @@
     };
   })();
 
-  const env = () => {
+  const envStatic = () => {
     const c = canvas, r = c.getBoundingClientRect();
     const gl = glRef;
     let renderer = 'n/a', ver = gl ? 'pending' : 'not created yet', maxVp = 'n/a';
@@ -466,26 +466,33 @@
     }
     return [
       'ua        ' + navigator.userAgent,
-      'viewport  ' + innerWidth + 'x' + innerHeight + '  dpr ' + devicePixelRatio,
-      'canvas    css ' + Math.round(r.width) + 'x' + Math.round(r.height) +
-        '   backing ' + c.width + 'x' + c.height,
-      'fb cap    ' + (window.rrFbCap || 'default') + (contextLost ? '   <b>WEBGL CONTEXT LOST</b>' : ''),
+      'fb cap    ' + (window.rrFbCap || 'default'),
       'interp    ' + (window.rrInterp ? 'on  (?interp=1)' : 'off'),
       'batching  ' + (window.rrBatch === 0 ? 'off (?batch=0)' : 'on'),
       'webgl     ' + ver,
       'renderer  ' + renderer,
       'max vp    ' + maxVp,
       'wasm heap ' + heap,
+    ].join('\n') + '\n';
+  };
+
+  /* Only the lines that actually change, so the refresh does not relayout the
+     user-agent string and everything else four times a second. */
+  const envLive = () => {
+    const c = canvas, r = c.getBoundingClientRect();
+    const f = frameStats();
+    const frameLines = !f ? 'frame     measuring' :
+      ('frame     ' + f.dAvg.toFixed(1) + ' ms avg  ' + f.dMax.toFixed(1) +
+         ' worst   ' + Math.round(f.fps) + ' fps\n' +
+       'hitches   ' + f.late + ' of last ' + f.window + ' frames ran long\n' +
+       'cpu/frame ' + f.cAvg.toFixed(2) + ' ms avg  ' + f.cMax.toFixed(2) +
+         ' worst   ' + Math.round(f.cAvg / (1000 / 60) * 100) + '% of the 60Hz budget');
+    return [
+      'viewport  ' + innerWidth + 'x' + innerHeight + '  dpr ' + devicePixelRatio,
+      'canvas    css ' + Math.round(r.width) + 'x' + Math.round(r.height) +
+        '   backing ' + c.width + 'x' + c.height + (contextLost ? '   CONTEXT LOST' : ''),
       'draws/frm ' + drawCalls + '  peak ' + drawCallsPeak,
-      (() => {
-        const f = frameStats();
-        if (!f) return 'frame     measuring';
-        const pct = Math.round(f.cAvg / (1000 / 60) * 100);
-        return 'frame     ' + f.dAvg.toFixed(1) + ' ms avg  ' + f.dMax.toFixed(1) +
-                 ' worst   ' + Math.round(f.fps) + ' fps\n' +
-               'cpu/frame ' + f.cAvg.toFixed(2) + ' ms avg  ' + f.cMax.toFixed(2) +
-                 ' worst   ' + pct + '% of the 60Hz budget';
-      })(),
+      frameLines,
       'audio     ' + audioPlays + ' play() calls' +
         (audioFails.length ? '   rejected: ' + audioFails.join(',') : '   no rejections'),
     ].join('\n');
@@ -493,10 +500,27 @@
 
   let wantDiag = false;
 
+  /* The panel was the largest single source of long frames -- it rebuilt its
+     whole innerHTML, user-agent string and all, four times a second, and on a
+     phone that layout and repaint costs more than the frame it is reporting on.
+     The static half is written once and only the short live half is updated,
+     with textContent so there is no HTML to reparse. */
+  let dgS = null, dgL = null, dgE = null, dgErrN = -1;
   const showDiag = () => {
     diagEl.hidden = false;
-    diagEl.innerHTML = '<b>rRootage diagnostics</b>\n' + env() +
-      (errors.length ? '\n\n<span class="err">' + errors.slice(-6).join('\n') + '</span>' : '');
+    if (!dgL) {
+      diagEl.innerHTML = '<b>rRootage diagnostics</b>\n<span id="dgS"></span>' +
+                         '<span id="dgL"></span><span id="dgE" class="err"></span>';
+      dgS = document.getElementById('dgS');
+      dgL = document.getElementById('dgL');
+      dgE = document.getElementById('dgE');
+      dgS.textContent = envStatic();
+    }
+    dgL.textContent = envLive();
+    if (errors.length !== dgErrN) {
+      dgErrN = errors.length;
+      dgE.textContent = errors.length ? '\n\n' + errors.slice(-6).join('\n') : '';
+    }
   };
 
   /* A non-fatal note must not blanket the playfield. Show the panel, then retire
@@ -617,7 +641,15 @@
         cSum += c; if (c > cMax) cMax = c;
       }
       const dAvg = dSum / filled;
-      return { dAvg, dMax, cAvg: cSum / filled, cMax, fps: dAvg > 0 ? 1000 / dAvg : 0 };
+      /* A single worst value cannot say whether that was one blip or a constant
+         stutter, so count how many frames in the window ran long. The threshold
+         is one and a half display intervals, taken from the median rather than
+         assumed to be 60Hz, so it adapts to a 120Hz panel. */
+      const limit = dAvg * 1.5;
+      let late = 0;
+      for (let i = 0; i < filled; i++) if (dts[i] > limit) late++;
+      return { dAvg, dMax, cAvg: cSum / filled, cMax, late, window: filled,
+               fps: dAvg > 0 ? 1000 / dAvg : 0 };
     };
 
     const tick = () => {
