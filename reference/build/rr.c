@@ -42,6 +42,10 @@ static void initFirst() {
   time(&timer);
   srand(timer);
 
+#ifdef __EMSCRIPTEN__
+  /* ?interp=1 sets window.rrInterp before the runtime starts. */
+  rrInterp = EM_ASM_INT({ return (typeof window.rrInterp === 'number' && window.rrInterp) ? 1 : 0; });
+#endif
   loadPreference();
   initBarragemanager();
   initAttractManager();
@@ -240,6 +244,9 @@ static void parseArgs(int argc, char *argv[]) {
 }
 
 int interval = INTERVAL_BASE;
+
+int   rrInterp = 0;
+float rrLerp   = 0.0f;
 int tick = 0;
 static int pPrsd = 1;
 
@@ -323,6 +330,19 @@ static void mainLoopIteration(void) {
   for ( i=0 ; i<frame ; i++ ) {
     move();
     tick++;
+  }
+
+  /* Whatever wall time is left over sits inside the current step, so this is the
+     fraction of the way from the previous simulation state to the latest one.
+     Drawing at that fraction trails the newest state by up to one step -- which
+     is the price of the extra smoothness, and why it is opt-in. */
+  if ( rrInterp ) {
+    long rem = nowTick - prvTickCount;
+    if ( rem < 0 ) rem = 0;
+    if ( rem > interval ) rem = interval;
+    rrLerp = (float)rem / (float)interval;
+  } else {
+    rrLerp = 1.0f;
   }
 
   drawGLSceneStart();

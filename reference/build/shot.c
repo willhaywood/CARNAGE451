@@ -18,6 +18,7 @@
 #include "vector.h"
 #include "degutil.h"
 #include "ship.h"
+#include "rr.h"
 #include "shot.h"
 #include "attractmanager.h"
 #include "boss_mtd.h"
@@ -46,6 +47,8 @@ void addShot(int x, int y, int ox, int oy, int color) {
   if ( i >= SHOT_MAX ) return;
   st = &(shot[shotIdx]);
   st->x = (float)x/FIELD_SCREEN_RATIO; st->y = -(float)y/FIELD_SCREEN_RATIO;
+  /* A new shot has no history; start it still so it does not streak in. */
+  st->px = st->x; st->py = st->y;
   d = getDeg(-ox, oy); ds = getDistance(ox, oy);
   st->mx = -(float)sctbl[d]    *SHOT_SPEED/(FIELD_SCREEN_RATIO*256);
   st->my =  (float)sctbl[d+256]*SHOT_SPEED/(FIELD_SCREEN_RATIO*256);
@@ -63,6 +66,7 @@ void moveShots() {
   for ( i=0 ; i<SHOT_MAX ; i++ ) {
     if ( shot[i].cnt < 0 ) continue;
     st = &(shot[i]);
+    st->px = st->x; st->py = st->y;
     st->x += st->mx/2;
     st->y += st->my/2;
     st->height += SHOT_HEIHGT_SPEED/2;
@@ -87,6 +91,7 @@ void drawShots() {
   for ( i=0 ; i<SHOT_MAX ; i++ ) {
     if ( shot[i].cnt < 0 ) continue;
     st = &(shot[i]);
-    drawShot(st->x, st->y, st->d, st->color, st->width, st->height);
+    drawShot(RR_LERP(st->px, st->x), RR_LERP(st->py, st->y),
+             st->d, st->color, st->width, st->height);
   }
 }

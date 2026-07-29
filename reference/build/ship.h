@@ -19,7 +19,7 @@
 #define FIELD_SCREEN_RATIO 10000.0f 
 
 typedef struct {
-  Vector pos, bombPos;
+  Vector pos, ppos, bombPos;
   int cnt, laserCnt;
   int speed;
   int invCnt;

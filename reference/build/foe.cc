@@ -401,8 +401,8 @@ void drawBulletsWake() {
   for ( i=0 ; i<FOE_MAX ; i++ ) {
     if ( foe[i].spc == NOT_EXIST || foe[i].spc == BATTERY || foe[i].cnt >= 64 ) continue;
     fe = &(foe[i]);
-    x =  (float)fe->pos.x / FIELD_SCREEN_RATIO;
-    y = -(float)fe->pos.y / FIELD_SCREEN_RATIO;
+    x =  RR_LERP(fe->ppos.x, fe->pos.x) / FIELD_SCREEN_RATIO;
+    y = -RR_LERP(fe->ppos.y, fe->pos.y) / FIELD_SCREEN_RATIO;
     sx =  (float)fe->spos.x / FIELD_SCREEN_RATIO;
     sy = -(float)fe->spos.y / FIELD_SCREEN_RATIO;
     drawLine(x, y, 0, sx, sy, 0, 150, 180, 90, (63-fe->cnt)*3);
@@ -422,8 +422,10 @@ void drawBullets() {
   for ( i=0 ; i<FOE_MAX ; i++ ) {
     if ( foe[i].spc == NOT_EXIST || foe[i].spc == BATTERY ) continue;
     fe = &(foe[i]);
-    x =  (float)fe->pos.x / FIELD_SCREEN_RATIO;
-    y = -(float)fe->pos.y / FIELD_SCREEN_RATIO;
+    /* Position is interpolated; facing is not -- it is derived from the step's
+       direction of travel, which does not change within a step. */
+    x =  RR_LERP(fe->ppos.x, fe->pos.x) / FIELD_SCREEN_RATIO;
+    y = -RR_LERP(fe->ppos.y, fe->pos.y) / FIELD_SCREEN_RATIO;
     d = 1023 - getDeg(fe->pos.x - fe->ppos.x, fe->pos.y - fe->ppos.y);
     bt = fe->shapeType;
     if ( mode == IKA_MODE ) {

@@ -12,7 +12,7 @@
 #include "vector.h"
 
 typedef struct {
-  float x, y, mx, my;
+  float x, y, px, py, mx, my;
   float d;
   int cnt, color;
   float width, height;

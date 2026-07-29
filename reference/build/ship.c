@@ -64,6 +64,7 @@ static int btn2f;
 
 void initShip() {
   ship.pos.x = 0; ship.pos.y = FIELD_HEIGHT_8/5*2;
+  ship.ppos = ship.pos;
   ship.cnt = 0; ship.laserCnt = 0;
   ship.invCnt = SHIP_INVINCIBLE_CNT_BASE;
   ship.bombCnt = 0;
@@ -112,6 +113,7 @@ void moveShip() {
   int btn = getButtonState();
   int sd = -1;
   Vector *bossPos;
+  ship.ppos = ship.pos;
   if ( pad & PAD_RIGHT ) {
     sd = 2;
   }
@@ -378,8 +380,8 @@ void moveShip() {
 void drawShip() {
   float x, y, bx, by;
   int inv = 0, ic;
-  x =  (float)ship.pos.x / FIELD_SCREEN_RATIO;
-  y = -(float)ship.pos.y / FIELD_SCREEN_RATIO;
+  x =  RR_LERP(ship.ppos.x, ship.pos.x) / FIELD_SCREEN_RATIO;
+  y = -RR_LERP(ship.ppos.y, ship.pos.y) / FIELD_SCREEN_RATIO;
   switch ( mode ) {
   case NORMAL_MODE:
     if ( ship.bombCnt > 0 ) {

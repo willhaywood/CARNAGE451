@@ -470,6 +470,7 @@
       'canvas    css ' + Math.round(r.width) + 'x' + Math.round(r.height) +
         '   backing ' + c.width + 'x' + c.height,
       'fb cap    ' + (window.rrFbCap || 'default') + (contextLost ? '   <b>WEBGL CONTEXT LOST</b>' : ''),
+      'interp    ' + (window.rrInterp ? 'on  (?interp=1)' : 'off'),
       'webgl     ' + ver,
       'renderer  ' + renderer,
       'max vp    ' + maxVp,
@@ -638,6 +639,10 @@
 
   const params = new URLSearchParams(location.search);
   if (params.has('fb')) window.rrFbCap = parseInt(params.get('fb'), 10) || 0;
+  // ?interp=1 draws movers between simulation steps, so a 120Hz panel shows 120
+  // distinct frames instead of the same 62.5 twice. Off by default: it trails the
+  // newest state by up to one 16ms step, which is a real trade in a dodging game.
+  if (params.get('interp') === '1') window.rrInterp = 1;
   if (params.has('diag')) { wantDiag = true; pinned = true; }  // revealed by the frame ticker
   diagEl.addEventListener('pointerdown', (e) => { diagEl.hidden = true; pinned = false; e.stopPropagation(); });
 

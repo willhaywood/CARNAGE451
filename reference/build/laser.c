@@ -17,6 +17,7 @@
 #include "degutil.h"
 #include "laser.h"
 #include "ship.h"
+#include "rr.h"
 #include "frag.h"
 #include "boss_mtd.h"
 
@@ -114,8 +115,10 @@ void drawLasers() {
   for ( i=0 ; i<LASER_MAX ; i++ ) {
     if ( laser[i].cnt == NOT_EXIST ) continue;
     ls = &(laser[i]);
-    x =  (float)ship.pos.x / FIELD_SCREEN_RATIO;
-    y = -(float)(ship.pos.y+ls->y) / FIELD_SCREEN_RATIO;
+    /* Anchored to the ship, so it must use the ship's *drawn* position --
+       otherwise the beam detaches from the ship that is firing it. */
+    x =  RR_LERP(ship.ppos.x, ship.pos.x) / FIELD_SCREEN_RATIO;
+    y = -(RR_LERP(ship.ppos.y, ship.pos.y) + (float)ls->y) / FIELD_SCREEN_RATIO;
     if ( ls->cnt > 1 )       t = 1;
     else if ( ls->cnt == 1 ) t = 0;
     else                     t = 2;

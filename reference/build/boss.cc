@@ -35,6 +35,7 @@ int bossTimer;
 
 void initBoss() {
   boss.x = BOSS_INITIAL_X; boss.y = BOSS_INITIAL_Y; 
+  boss.px = boss.x; boss.py = boss.y;
   boss.d = 0;
   boss.cnt = 0;
 }
@@ -560,6 +561,7 @@ static int allLmtOn = 0;
 void moveBoss() {
   int bpi;
   int i, j;
+  boss.px = boss.x; boss.py = boss.y;
   int ax, ay, d, od, aod, emd;
   int dfsChg;
   int lmtOn;
@@ -882,8 +884,8 @@ void drawBoss() {
   int crBpn, crBpl;
   int bpn;
   crBpn = crBpl = 0;
-  x =  (float)boss.x / FIELD_SCREEN_RATIO;
-  y = -(float)boss.y / FIELD_SCREEN_RATIO;
+  x =  RR_LERP(boss.px, boss.x) / FIELD_SCREEN_RATIO;
+  y = -RR_LERP(boss.py, boss.y) / FIELD_SCREEN_RATIO;
   if ( bossShape.diffuse > 0  && boss.state < DESTROIED ) {
     df = bossShape.diffuse;
     drawStar(1, x, y, 0, df, df, df, (float)(df+256)/500.0f);

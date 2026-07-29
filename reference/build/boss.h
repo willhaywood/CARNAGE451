@@ -81,7 +81,7 @@ typedef struct {
   BatteryShape shape;
   BatteryGroup batteryGroup[BATTERY_GROUP_MAX];
   int batteryGroupNum;
-  int x, y, d;
+  int x, y, px, py, d;
   int mpx[MOVE_POINT_MAX], mpy[MOVE_POINT_MAX];
   int mpNum, mpIdx;
   int speed, md;
