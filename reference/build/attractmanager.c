@@ -541,6 +541,38 @@ void moveTitleMenu() {
   titleCnt++;
 }
 
+/*
+ * Stage grid placement.
+ *
+ * The grid is laid out for a 640x480 board, where a 21-unit cell is a fair size.
+ * Portrait maps that same 640 across a phone's width, so the cell lands at about
+ * 13 CSS pixels -- far too small to read, let alone aim at. Portrait therefore
+ * scales the grid about its own centre and drops it into the space below the
+ * titles, which is empty there because the board is authored for a third of the
+ * height it actually gets.
+ *
+ * Only the cells move. The captions in the same loop are laid out against the
+ * board, not the grid, so they are left where they are -- which is why this
+ * scales coordinates rather than the matrix.
+ */
+#define GRID_NAT_CX  218      /* centre of the grid as laid out */
+#define GRID_NAT_CY  310
+#define GRID_PT_K    240      /* portrait scale, percent */
+#define GRID_PT_CX   320
+#define GRID_PT_CY   620
+
+static int gridK(void)  { return rrHudPortrait() ? GRID_PT_K : 100; }
+static int gridMapX(int x) {
+  if ( !rrHudPortrait() ) return x;
+  return GRID_PT_CX + (x - GRID_NAT_CX) * GRID_PT_K / 100;
+}
+static int gridMapY(int y) {
+  if ( !rrHudPortrait() ) return y;
+  return GRID_PT_CY + (y - GRID_NAT_CY) * GRID_PT_K / 100;
+}
+/* Cell sizes scale with the grid; caption sizes must not. */
+static int gridSz(int v) { return v * gridK() / 100; }
+
 void drawTitle() {
   int i;
   int r, g, b;
@@ -563,9 +595,9 @@ void drawTitle() {
     } else {
       r = 210; g = 210; b = 240;
     }
-    sx = stageX[i+MODE_NUM]; sy = stageY[i+MODE_NUM];
+    sx = gridMapX(stageX[i+MODE_NUM]); sy = gridMapY(stageY[i+MODE_NUM]);
     if ( i == slcStg ) {
-      int sz = STG_BOX_SIZE*3/2;
+      int sz = gridSz(STG_BOX_SIZE*3/2);
       if ( titleCnt < 16 ) sz = sz*titleCnt/16;
       drawBox(sx, sy, sz, sz, r, g, b);
       sz = sz*3/5;
@@ -584,10 +616,19 @@ void drawTitle() {
 	drawString(quitChr, 410, 133, 12, 0, 210, 210, 240);
       }
     } else {
-      drawBox(sx, sy, STG_BOX_SIZE/2, STG_BOX_SIZE/2, r*2/3, g*2/3, b*2/3);
+      drawBox(sx, sy, gridSz(STG_BOX_SIZE/2), gridSz(STG_BOX_SIZE/2), r*2/3, g*2/3, b*2/3);
     }
   }
-  drawString(mdChr[mode], mdChrX[mode], 455, 12, 0, 150, 150, 200);
+  /* The mode name sits under the board in landscape; in portrait it goes under
+     the enlarged grid, centred and scaled to match it. */
+  if ( rrHudPortrait() ) {
+    int len = 0, adv;
+    while ( mdChr[mode][len] ) len++;
+    adv = (int)(18 * 1.7f);
+    drawString(mdChr[mode], 320 - (len-1)*adv/2, 1085, 18, 0, 150, 150, 200);
+  } else {
+    drawString(mdChr[mode], mdChrX[mode], 455, 12, 0, 150, 150, 200);
+  }
 }
 
 static int goCnt;
