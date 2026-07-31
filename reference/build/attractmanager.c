@@ -324,14 +324,14 @@ void setHiScore(int cleard) {
  */
 #define MULT_MAX 1000
 
-static char multStr[]  = "x";
-static char multStr2[] = "MUL";
-
+/* No suffix and no caption: the letters are a seven-segment set, and it has no
+   X at all -- index 33 carries zero segments, so an 'x' draws nothing and only
+   the bar's own edges show up beside the digits. Y and Z are barely better. The
+   bar and its position carry the meaning instead. */
 static void drawMultBar(int cx, int cy, int halfW, int halfH, int size) {
   int n = bonusScore/10*10;
-  int digits = 1, v = n, glyphs, adv, i, fw;
+  int digits = 1, v = n, adv, i, fw;
   while ( v >= 10 ) { v /= 10; digits++; }
-  glyphs = digits + 1;                        /* the digits plus the 'x' */
   adv = (int)(size * 1.7f);
 
   /* track */
@@ -344,21 +344,16 @@ static void drawMultBar(int cx, int cy, int halfW, int halfH, int size) {
     else                drawBox(cx - halfW + fw, cy, fw, halfH, 70, 130, 95);
   }
 
-  /* value centred on the bar: rightmost glyph is the 'x', so the number's last
-     digit sits one advance left of it */
-  i = cx + (glyphs - 1) * adv / 2;
-  drawLetter('x' - 'a' + 10, i, cy, size, 0, 235, 245, 225);
-  drawNumCenter(n, i - adv, cy, size, 235, 245, 225);
+  /* value centred on the bar */
+  i = cx + (digits - 1) * adv / 2;
+  drawNumCenter(n, i, cy, size, 235, 245, 225);
 }
 
 static void drawScorePortrait() {
   drawNumCenter(score, 260, RRP_ROW_1, RRP_SCORE_SIZE, 200, 200, 222);
   /* No run, no multiplier -- and on the title screen this space belongs to the
      stage grid. Gated exactly as LEFT/BOMB are. */
-  if ( left >= 0 ) {
-    drawString(multStr2, 26, RRP_ROW_2, 10, 0, 150, 170, 155);
-    drawMultBar(178, RRP_ROW_2, 90, 13, RRP_BONUS_SIZE);
-  }
+  if ( left >= 0 ) drawMultBar(154, RRP_ROW_2, 114, 13, RRP_BONUS_SIZE);
 }
 
 void drawScore() {
@@ -367,10 +362,7 @@ void drawScore() {
     return;
   }
   drawNum(score, 118, 24, 28, 200, 200, 222);
-  if ( left >= 0 ) {
-    drawString(multStr2, 20, 300, 10, 0, 150, 170, 155);
-    drawMultBar(80, 330, 58, 11, 12);
-  }
+  if ( left >= 0 ) drawMultBar(80, 315, 66, 11, 12);
 }
 
 #define SCENE_STAT_X 77
