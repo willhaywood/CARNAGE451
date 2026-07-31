@@ -31,6 +31,8 @@
 
 Ship ship;
 int bonusScore;
+int bonusHot;
+static int bonusPrev;
 int bomb;
 
 #define SHIP_SPEED 1000
@@ -53,6 +55,7 @@ int bomb;
 
 static void resetPlayer() {
   bonusScore = 10;
+  bonusPrev = 10; bonusHot = 0;
   bomb = 3;
   ship.grzInvCnt = ship.rollingCnt = ship.grzf = 0;
   ship.grzWdt = GRZ_WIDTH;
@@ -381,6 +384,14 @@ void moveShip() {
     if ( target < -1.0f ) target = -1.0f;
     ship.bank += (target * SHIP_BANK_DEG - ship.bank) * 0.18f;
   }
+
+  /* The multiplier climbs only while the boss is being hit and bleeds off at 10
+     a frame otherwise, so which way it is moving is the thing worth showing. The
+     rise is held for a few frames: laser hits land in bursts, and colouring the
+     gaps between them "decaying" would just strobe. */
+  if ( bonusScore > bonusPrev )   bonusHot = 12;
+  else if ( bonusHot > 0 )        bonusHot--;
+  bonusPrev = bonusScore;
 
   ship.cnt++;
   if ( ship.invCnt > 0 ) ship.invCnt--;

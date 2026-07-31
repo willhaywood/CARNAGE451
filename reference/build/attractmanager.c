@@ -314,9 +314,51 @@ void setHiScore(int cleard) {
 #define RRP_VAL_SIZE     18
 
 /* drawNumCenter draws horizontally, right-aligned on x, despite the name. */
+/*
+ * The multiplier, as a bar with its own value sitting in the middle of it.
+ *
+ * bonusScore is what a boss hit is actually worth, 10 up to a cap of 1000, and
+ * it decays whenever the boss is not being hit -- so the number alone says very
+ * little. The bar gives the reading that matters at a glance (how near the cap)
+ * and the colour says which way it is going, which digits cannot.
+ */
+#define MULT_MAX 1000
+
+static char multStr[]  = "x";
+static char multStr2[] = "MUL";
+
+static void drawMultBar(int cx, int cy, int halfW, int halfH, int size) {
+  int n = bonusScore/10*10;
+  int digits = 1, v = n, glyphs, adv, i, fw;
+  while ( v >= 10 ) { v /= 10; digits++; }
+  glyphs = digits + 1;                        /* the digits plus the 'x' */
+  adv = (int)(size * 1.7f);
+
+  /* track */
+  drawBox(cx, cy, halfW, halfH, 45, 70, 55);
+
+  /* fill, left-anchored, proportional to the cap */
+  fw = halfW * n / MULT_MAX;
+  if ( fw > 0 ) {
+    if ( bonusHot > 0 ) drawBox(cx - halfW + fw, cy, fw, halfH, 210, 190, 90);
+    else                drawBox(cx - halfW + fw, cy, fw, halfH, 70, 130, 95);
+  }
+
+  /* value centred on the bar: rightmost glyph is the 'x', so the number's last
+     digit sits one advance left of it */
+  i = cx + (glyphs - 1) * adv / 2;
+  drawLetter('x' - 'a' + 10, i, cy, size, 0, 235, 245, 225);
+  drawNumCenter(n, i - adv, cy, size, 235, 245, 225);
+}
+
 static void drawScorePortrait() {
   drawNumCenter(score, 260, RRP_ROW_1, RRP_SCORE_SIZE, 200, 200, 222);
-  drawNumCenter(bonusScore/10*10, 250, RRP_ROW_2, RRP_BONUS_SIZE, 200, 200, 222);
+  /* No run, no multiplier -- and on the title screen this space belongs to the
+     stage grid. Gated exactly as LEFT/BOMB are. */
+  if ( left >= 0 ) {
+    drawString(multStr2, 26, RRP_ROW_2, 10, 0, 150, 170, 155);
+    drawMultBar(178, RRP_ROW_2, 90, 13, RRP_BONUS_SIZE);
+  }
 }
 
 void drawScore() {
@@ -325,7 +367,10 @@ void drawScore() {
     return;
   }
   drawNum(score, 118, 24, 28, 200, 200, 222);
-  drawNum(bonusScore/10*10, 24, 14, 16, 200, 200, 222);
+  if ( left >= 0 ) {
+    drawString(multStr2, 20, 300, 10, 0, 150, 170, 155);
+    drawMultBar(80, 330, 58, 11, 12);
+  }
 }
 
 #define SCENE_STAT_X 77

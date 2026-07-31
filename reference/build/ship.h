@@ -33,6 +33,8 @@ typedef struct {
 
 extern Ship ship;
 extern int bonusScore, bomb;
+/* Frames left of the 'climbing' colour; 0 means the multiplier is decaying. */
+extern int bonusHot;
 
 void initShip();
 void moveShip();
