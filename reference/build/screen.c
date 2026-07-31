@@ -265,10 +265,28 @@ static float rrFieldBot  = 480.0f; /* ...and its bottom edge */
    would otherwise just sit unused below. */
 #define RR_TOP_STRIP   200
 
+/*
+ * Which layout wins is a question about playfield area, not about which way up
+ * the screen is.
+ *
+ * Portrait gives a full-width 2:3 field, but has to spend RR_TOP_STRIP on the
+ * HUD -- and that strip is a fraction of the *width*, so on a screen only
+ * slightly taller than it is wide it eats the height the field needed and the
+ * field ends up narrower than the plain 4:3 letterbox would have been.
+ *
+ * Solving the two areas against each other puts the crossover at about
+ * W/H = 0.94, so portrait is taken only when the screen is at least 1.06 times
+ * taller than it is wide. The old test was "taller than 4:3", which handed
+ * portrait to desktop windows at 1.17 and gave them about half the playfield.
+ */
+#define RR_PORTRAIT_NUM 106     /* portrait when H*100 >= W*106 */
+#define RR_PORTRAIT_DEN 100
+
 // Reset viewport when the screen is resized.
 static void screenResized() {
-  if (screenHeight * SCREEN_WIDTH <= screenWidth * SCREEN_HEIGHT) {
-    /* 4:3 or wider -- the original letterbox, boards masking the sides. */
+  if (screenHeight * RR_PORTRAIT_DEN < screenWidth * RR_PORTRAIT_NUM) {
+    /* Not tall enough to be worth it -- the original letterbox, boards masking
+       the sides. */
     rrPortrait = 0;
     vpW = SCREEN_WIDTH * screenHeight / SCREEN_HEIGHT;
     vpH = screenHeight;
